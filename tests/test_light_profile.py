@@ -487,14 +487,14 @@ async def test_daylight_is_restored_without_turning_off_lights_on(ha):
     assert current_jobs() != original
     await action(hass, "turn_on", {"entity_id": SHOWER}, {"brightness": 99})
     assert lights[SHOWER].calls[-1] == {"brightness": 99, "rgb_color": (40, 80, 90)}
-    assert current_jobs() == original
+    assert current_jobs() != original
     await action(hass, "turn_off", {"entity_id": SHOWER})
     await action(hass, "turn_on", {"entity_id": SHOWER})
     assert lights[SHOWER].calls[-1] == {}
 
 
 @pytest.mark.asyncio
-async def test_interception_stops_when_there_is_nothing_to_restore(ha):
+async def test_interception_stays_for_configured_lights_until_profile_is_unloaded(ha):
     hass, lights = ha
     service = hass.services.async_services_for_domain("light")["turn_on"]
     original = service.job
@@ -503,6 +503,7 @@ async def test_interception_stops_when_there_is_nothing_to_restore(ha):
         hass, entry, {"name": "Room", "lights": [HALL], "brightness": 10}
     )
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert service.job is not original
 
     await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
     assert service.job is not original
@@ -510,8 +511,10 @@ async def test_interception_stops_when_there_is_nothing_to_restore(ha):
     assert lights[HALL].calls[-1]["brightness"] == 26
     await action(hass, "turn_off", {"entity_id": HALL})
     await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
-    assert service.job is original
+    assert service.job is not original
     assert hass.states.is_state(HALL, STATE_OFF)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert service.job is original
 
 
 @pytest.mark.asyncio
@@ -619,7 +622,7 @@ async def test_per_light_effects_and_daylight_restoration(ha):
     await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
     assert lights[MIRROR].calls[-1]["effect"] == "off"
     await action(hass, "turn_on", {"entity_id": SHOWER})
-    assert lights[SHOWER].calls[-1]["effect"] == "Calm"
+    assert lights[SHOWER].calls[-1] == {"brightness": 150, "rgb_color": (30, 40, 50)}
 
     await action(hass, "turn_off", {"entity_id": MIRROR})
     lights[MIRROR]._attr_effect_list = ["off"]
@@ -1043,7 +1046,7 @@ async def test_restore_valid_brightness_when_reported_color_is_invalid(ha):
 
 
 @pytest.mark.asyncio
-async def test_zero_brightness_turns_off_only_its_group_and_restores_on_next_turn_on(
+async def test_zero_brightness_turns_off_only_its_group_and_restores_latest_request(
     ha,
 ):
     hass, lights = ha
@@ -1080,9 +1083,72 @@ async def test_zero_brightness_turns_off_only_its_group_and_restores_on_next_tur
     assert lights[SHOWER].calls[-1]["brightness"] == 26
 
     await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    assert hass.states.is_state(MIRROR, STATE_ON)
+    assert lights[MIRROR].calls[-1] == {"brightness": 191, "rgb_color": (0, 0, 255)}
+    assert hass.states.is_state(HALL, STATE_OFF)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_command", [None, "turn_off", "brightness_zero", "step"])
+async def test_zero_brightness_restores_power_and_remembers_partial_requests(
+    ha, last_command
+):
+    hass, lights = ha
+    entry = await install(hass)
+    await add_group(hass, entry, {"name": "Off", "lights": [MIRROR], "brightness": 0})
+    target = {"entity_id": MIRROR}
+    await action(hass, "turn_on", target, {"brightness": 180, "rgb_color": [1, 2, 3]})
+    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
     assert hass.states.is_state(MIRROR, STATE_OFF)
-    await action(hass, "turn_on", {"entity_id": MIRROR})
-    assert lights[MIRROR].calls[-1]["brightness"] == 195
+
+    if last_command is not None:
+        await action(hass, "turn_on", target, {"brightness": 100})
+        await action(hass, "turn_on", target, {"rgb_color": [4, 5, 6]})
+        if last_command == "turn_off":
+            await action(hass, "turn_off", target)
+        elif last_command == "brightness_zero":
+            await action(hass, "turn_on", target, {"brightness_pct": 0})
+        else:
+            await action(hass, "turn_on", target, {"brightness_step": 25})
+        assert hass.states.is_state(MIRROR, STATE_OFF)
+
+    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    if last_command in ("turn_off", "brightness_zero"):
+        assert hass.states.is_state(MIRROR, STATE_OFF)
+        await action(hass, "turn_on", target)
+        expected = {"brightness": 100, "rgb_color": (4, 5, 6)}
+    elif last_command == "step":
+        expected = {"brightness": 125, "rgb_color": (4, 5, 6)}
+    else:
+        expected = {"brightness": 180, "rgb_color": (1, 2, 3)}
+    assert hass.states.is_state(MIRROR, STATE_ON)
+    assert lights[MIRROR].calls[-1] == expected
+
+
+@pytest.mark.asyncio
+async def test_turn_on_intent_survives_handoff_from_zero_brightness_profile(ha):
+    hass, lights = ha
+    low = await install(hass, title="Evening", priority=10)
+    high = await install(hass, title="Night", priority=30)
+    for entry, brightness in ((low, 40), (high, 0)):
+        await add_group(
+            hass,
+            entry,
+            {"name": "Shared", "lights": [MIRROR], "brightness": brightness},
+        )
+    await action(
+        hass,
+        "turn_on",
+        {"entity_id": ["switch.evening", "switch.night"]},
+        domain="switch",
+    )
+    await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 150})
+    assert hass.states.is_state(MIRROR, STATE_OFF)
+    await action(hass, "turn_off", {"entity_id": "switch.night"}, domain="switch")
+    assert hass.states.is_state(MIRROR, STATE_ON)
+    assert lights[MIRROR].calls[-1]["brightness"] == 102
+    await action(hass, "turn_off", {"entity_id": "switch.evening"}, domain="switch")
+    assert lights[MIRROR].calls[-1]["brightness"] == 150
 
 
 @pytest.mark.asyncio

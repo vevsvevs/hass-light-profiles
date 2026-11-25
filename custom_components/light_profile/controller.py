@@ -11,11 +11,14 @@ from typing import Any
 from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
 from homeassistant.components.light import LightEntity
 from homeassistant.components.light.const import LightServiceArgument as Arg
+from homeassistant.components.light.helper import preprocess_turn_on_alternatives
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import (
     MATCH_ALL,
     SERVICE_TOGGLE,
+    SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
+    STATE_OFF,
     STATE_ON,
 )
 from homeassistant.core import (
@@ -116,7 +119,7 @@ class Profile:
 
 
 class LightProfiles:
-    """Resolve active profiles and preserve one baseline per light."""
+    """Resolve active profiles and keep each light's requested state."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -130,18 +133,19 @@ class LightProfiles:
         self._store = Store[dict[str, Any]](hass, 1, DOMAIN)
         self._remove_interception: Callable[[], None] | None = None
         self._last_day: dict[str, dict[str, Any]] = {}
-        self._baseline: dict[str, dict[str, Any]] = {}
+        self._desired_settings: dict[str, dict[str, Any]] = {}
+        self._desired_power: dict[str, bool] = {}
         self._pending: dict[str, dict[str, Any]] = {}
         self._applied: dict[str, str] = {}
         self._lock = asyncio.Lock()
-        self._only_if_on: ContextVar[str | None] = ContextVar(
-            "light_profile_only_if_on", default=None
+        self._internal: ContextVar[tuple[str, set[str]] | None] = ContextVar(
+            "light_profile_internal", default=None
         )
 
     async def async_load(self) -> None:
         if data := await self._store.async_load():
             self._enabled = set(data["enabled"])
-            self._last_day, self._baseline, self._pending = (
+            self._last_day, self._desired_settings, self._pending = (
                 {
                     entity_id: normalized
                     for entity_id, settings in data[key].items()
@@ -150,13 +154,15 @@ class LightProfiles:
                 for key in ("last_day", "baseline", "pending")
             )
             self._applied = data["applied"]
+            self._desired_power = data.get("desired_power", {})
 
     @callback
     def _storage_data(self) -> dict[str, Any]:
         return {
             "enabled": sorted(self._enabled),
             "last_day": dict(self._last_day),
-            "baseline": dict(self._baseline),
+            "baseline": dict(self._desired_settings),
+            "desired_power": dict(self._desired_power),
             "pending": dict(self._pending),
             "applied": dict(self._applied),
         }
@@ -204,7 +210,8 @@ class LightProfiles:
             self._enabled.discard(entry_id)
             if not self.hass.config_entries.async_entries(DOMAIN):
                 self._last_day.clear()
-                self._baseline.clear()
+                self._desired_settings.clear()
+                self._desired_power.clear()
                 self._pending.clear()
                 self._applied.clear()
                 await self._store.async_remove()
@@ -243,7 +250,12 @@ class LightProfiles:
             for entity_id, group in profile.lights.items()
             if group.enabled
         }
-        if self._profiles and (next_lights or self._pending):
+        tracked = {
+            entity_id
+            for profile in self._profiles.values()
+            for entity_id in profile.lights
+        }
+        if tracked or self._pending or self._lights:
             try:
                 self._ensure_interception()
             except RuntimeError as err:
@@ -252,46 +264,63 @@ class LightProfiles:
         previous = self._lights
         for entity_id in next_lights.keys() - previous.keys():
             state = self.hass.states.get(entity_id)
+            if state is not None and state.state in (STATE_ON, STATE_OFF):
+                self._desired_power.setdefault(entity_id, state.state == STATE_ON)
             current = reported_settings(state)
-            saved = self._pending.pop(entity_id, None) or self._baseline.get(entity_id)
+            saved = self._pending.pop(entity_id, None) or self._desired_settings.get(
+                entity_id
+            )
             if not saved:
                 if state is not None and state.state == STATE_ON:
                     saved = current or self._last_day.get(entity_id)
                 else:
                     saved = self._last_day.get(entity_id) or current
             if saved:
-                self._baseline[entity_id] = saved
+                self._desired_settings[entity_id] = saved
 
         removed = previous.keys() - next_lights.keys()
+        targets = {}
+        wake = set()
         for entity_id in removed:
-            saved = self._baseline.pop(entity_id, None)
-            if self._applied.pop(entity_id, None) is not None and saved:
+            saved = self._desired_settings.pop(entity_id, None)
+            desired_on = self._desired_power.pop(entity_id, None)
+            if self._applied.pop(entity_id, None) is None:
+                continue
+            if saved:
                 self._pending[entity_id] = saved
+            if desired_on:
+                targets[entity_id] = saved or {}
+                wake.add(entity_id)
+            elif desired_on is False:
+                targets[entity_id] = {Arg.BRIGHTNESS: 0}
+            elif saved:
+                targets[entity_id] = saved
 
         self._lights = next_lights
-        self._update_tracking()
+        self._update_tracking(tracked)
         self._update_listener()
         self._remove_interception_if_idle()
-        await self.async_save()
         if apply:
-            targets = {
-                entity_id: self._with_handoff(
+            for entity_id, group in next_lights.items():
+                old_group = previous.get(entity_id)
+                if group == old_group:
+                    continue
+                targets[entity_id] = self._with_handoff(
                     entity_id,
                     group.preset_for(self.hass.states.get(entity_id), entity_id),
                 )
-                for entity_id, group in next_lights.items()
-                if group != previous.get(entity_id)
-            }
-            targets.update(
-                (entity_id, self._pending[entity_id])
-                for entity_id in removed
-                if entity_id in self._pending
-            )
+                if (
+                    old_group is not None
+                    and old_group.preset[Arg.BRIGHTNESS] == 0
+                    and group.preset[Arg.BRIGHTNESS] != 0
+                    and self._desired_power.get(entity_id)
+                    and entity_id in self._applied
+                ):
+                    wake.add(entity_id)
             if targets:
-                await self._update_lit(targets)
-                await self.async_save()
-        if not self._profiles:
-            self._detach_interception()
+                await self._update_lights(targets, wake)
+        self._remove_interception_if_idle()
+        await self.async_save()
 
     @callback
     def _ensure_interception(self) -> None:
@@ -300,7 +329,7 @@ class LightProfiles:
 
     @callback
     def _remove_interception_if_idle(self) -> None:
-        if not self._lights and not self._pending:
+        if not self._tracked and not self._pending:
             self._detach_interception()
 
     @callback
@@ -309,9 +338,11 @@ class LightProfiles:
             self._remove_interception()
             self._remove_interception = None
 
-    async def _update_lit(self, targets: Mapping[str, dict[str, Any]]) -> None:
+    async def _update_lights(
+        self, targets: Mapping[str, dict[str, Any]], wake: set[str]
+    ) -> None:
         context = Context()
-        token = self._only_if_on.set(context.id)
+        token = self._internal.set((context.id, wake))
         try:
             actions = [
                 self.hass.services.async_call(
@@ -322,7 +353,7 @@ class LightProfiles:
                     context=context,
                 )
                 for entity_id, settings in targets.items()
-                if self.hass.states.is_state(entity_id, STATE_ON)
+                if entity_id in wake or self.hass.states.is_state(entity_id, STATE_ON)
             ]
             for result in await asyncio.gather(*actions, return_exceptions=True):
                 if isinstance(result, Exception):
@@ -331,7 +362,7 @@ class LightProfiles:
                         result,
                     )
         finally:
-            self._only_if_on.reset(token)
+            self._internal.reset(token)
 
     @callback
     def _remember_day(self, entity_id: str) -> None:
@@ -350,12 +381,7 @@ class LightProfiles:
             self._remember_day(entity_id)
 
     @callback
-    def _update_tracking(self) -> None:
-        tracked = {
-            entity_id
-            for profile in self._profiles.values()
-            for entity_id in profile.lights
-        }
+    def _update_tracking(self, tracked: set[str]) -> None:
         if tracked == self._tracked:
             return
         if self._untrack is not None:
@@ -382,7 +408,9 @@ class LightProfiles:
     @callback
     def _mark_applied(self, entity_id: str, preset: Mapping[str, Any]) -> None:
         appearance = ""
-        if Arg.EFFECT in preset:
+        if preset[Arg.BRIGHTNESS] == 0:
+            appearance = self._applied.get(entity_id, "")
+        elif Arg.EFFECT in preset:
             appearance = Arg.EFFECT
         elif COLOR_PARAMS.intersection(preset):
             appearance = "color"
@@ -399,7 +427,7 @@ class LightProfiles:
         if not COLOR_PARAMS.intersection(preset):
             baseline = {
                 key: value
-                for key, value in self._baseline.get(entity_id, {}).items()
+                for key, value in self._desired_settings.get(entity_id, {}).items()
                 if key in _APPEARANCE and (key != Arg.EFFECT or value in effects)
             }
             preset = restore_missing(preset, baseline)
@@ -411,32 +439,79 @@ class LightProfiles:
             preset = preset | {Arg.EFFECT: off}
         return preset
 
+    @callback
+    def _remember_request(
+        self, light: LightEntity, service: str, params: dict[str, Any]
+    ) -> None:
+        """Update stable light settings from the command before applying a preset."""
+        entity_id = light.entity_id
+        active = entity_id in self._lights
+        desired = self._desired_settings if active else self._last_day
+        saved = desired.get(entity_id, {})
+        turn_on = service == SERVICE_TURN_ON or (
+            service == SERVICE_TOGGLE and not light.is_on
+        )
+        if turn_on:
+            params = params.copy()
+            current_on = self._desired_power.get(entity_id, light.is_on)
+            level = saved.get(Arg.BRIGHTNESS, saved.get(Arg.WHITE, 0))
+            if Arg.BRIGHTNESS_STEP in params or Arg.BRIGHTNESS_STEP_PCT in params:
+                level = level if current_on else 0
+                if Arg.BRIGHTNESS_STEP in params:
+                    level += params.pop(Arg.BRIGHTNESS_STEP)
+                else:
+                    percent = round(level / 255 * 100) + params.pop(
+                        Arg.BRIGHTNESS_STEP_PCT
+                    )
+                    level = round(255 * percent / 100)
+                params[Arg.BRIGHTNESS] = max(0, min(255, level))
+                preprocess_turn_on_alternatives(self.hass, params)
+            if params.get(Arg.WHITE) is True:
+                params[Arg.WHITE] = level or light.brightness
+            turn_on = not _requests_off(params)
+        if turn_on and (settings := normalize_settings(params)):
+            if Arg.WHITE in settings and Arg.BRIGHTNESS in settings:
+                settings[Arg.WHITE] = settings.pop(Arg.BRIGHTNESS)
+            updated = restore_missing(settings, saved)
+            if updated != saved:
+                desired[entity_id] = updated
+                self._store.async_delay_save(self._storage_data, 5)
+        if active and self._desired_power.get(entity_id) != turn_on:
+            self._desired_power[entity_id] = turn_on
+            self._store.async_delay_save(self._storage_data, 5)
+
     async def _apply_preset(
         self, original: HassJob, light: LightEntity, call: ServiceCall
     ) -> Any:
         entity_id = light.entity_id
-        editing_lit = self._only_if_on.get() == call.context.id
         saved = None
-        if editing_lit:
-            if not light.is_on:
+        params = call.data["params"]
+        if (internal := self._internal.get()) is not None and internal[
+            0
+        ] == call.context.id:
+            if not light.is_on and entity_id not in internal[1]:
                 return None
-            if group := self._lights.get(entity_id):
+            if entity_id in self._lights:
+                group = self._lights[entity_id]
                 self._mark_applied(
                     entity_id,
                     group.preset_for(self.hass.states.get(entity_id), entity_id),
                 )
-            else:
+            elif not _requests_off(params):
                 saved = self._pending.get(entity_id)
-        elif (
-            (entity_id in self._lights or entity_id in self._pending)
-            and not light.is_on
-            and isinstance(params := call.data.get("params"), dict)
-            and not _requests_off(params)
-        ):
-            if entity_id in self._lights:
+        elif entity_id in self._tracked or entity_id in self._pending:
+            if entity_id in self._tracked:
+                self._remember_request(light, call.service, params)
+            turning_on = call.service != SERVICE_TURN_OFF and not light.is_on
+            if turning_on and entity_id in self._lights and not _requests_off(params):
                 # Finish dispatching the source event if the action began eagerly.
                 await asyncio.sleep(0)
-                if not light.is_on and (group := self._lights.get(entity_id)):
+            if (
+                call.service != SERVICE_TURN_OFF
+                and not light.is_on
+                and not _requests_off(params)
+            ):
+                if group := self._lights.get(entity_id):
                     browser = self._sources.matches(call.context, _BROWSER)
                     if (browser and group.include_ui) or (
                         not browser
@@ -456,12 +531,8 @@ class LightProfiles:
                         )
                         self._mark_applied(entity_id, preset)
                         call = _with_preset(call, params, settings)
-            if (
-                entity_id not in self._lights
-                and not light.is_on
-                and (saved := self._pending.get(entity_id))
-            ):
-                call = _with_params(call, restore_missing(params, saved))
+                elif saved := self._pending.get(entity_id):
+                    call = _with_params(call, restore_missing(params, saved))
 
         previous = self.hass.states.get(entity_id) if saved is not None else None
         task = self.hass.async_run_hass_job(original, light, call)
@@ -480,7 +551,7 @@ class LightProfiles:
         """Wrap the per-light job while keeping Core's target and access checks."""
         registered = self.hass.services.async_services_for_domain(LIGHT_DOMAIN)
         replacements = []
-        for action in (SERVICE_TURN_ON, SERVICE_TOGGLE):
+        for action in (SERVICE_TURN_ON, SERVICE_TURN_OFF, SERVICE_TOGGLE):
             service = registered.get(action)
             if service is None:
                 raise RuntimeError(f"Missing Home Assistant light.{action} action")
