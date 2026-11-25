@@ -1,0 +1,17 @@
+"""Constants for Light Profiles."""
+
+DOMAIN = "light_profile"
+GROUP = "light_group"
+
+LIGHTS = "lights"
+SOURCES = "sources"
+INCLUDE_UI = "include_ui"
+DEVICE_PREFIX = "device:"
+ENTITY_PREFIX = "entity:"
+BRIGHTNESS = "brightness"
+TEMPERATURE = "temperature"
+COLOR = "color"
+TRANSITION_MS = "transition_ms"
+EFFECTS = "effects"
+CONFIGURE_EFFECTS = "configure_effects"
+PRIORITY = "priority"

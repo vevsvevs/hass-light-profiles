@@ -1,0 +1,108 @@
+{
+  "title": "Light Profiles",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a lighting profile",
+        "data": {
+          "name": "Profile name",
+          "priority": "Priority"
+        },
+        "data_description": {
+          "priority": "Higher numbers take precedence"
+        }
+      }
+    },
+    "error": {
+      "empty_profile_name": "Enter a profile name.",
+      "invalid_priority": "Enter a whole number.",
+      "duplicate_priority": "Another profile already uses this priority."
+    },
+    "abort": {
+      "already_configured": "A profile with this priority already exists."
+    }
+  },
+  "config_subentries": {
+    "light_group": {
+      "entry_type": "Light group",
+      "step": {
+        "user": {
+          "title": "Lighting group setup",
+          "data": {
+            "name": "Group name",
+            "lights": "Lights",
+            "brightness": "Brightness",
+            "temperature": "Color temperature (K)",
+            "color": "RGB color",
+            "sources": "Turn-on source filter",
+            "include_ui": "Apply settings when turned on from the interface",
+            "transition_ms": "Transition duration (ms)",
+            "configure_effects": "Configure light effects"
+          },
+          "data_description": {
+            "temperature": "Leave blank or enter 0 to use RGB",
+            "sources": "Leave empty to apply settings regardless of the turn-on source. You can choose devices, entities, automations, and scripts",
+            "include_ui": "Enable to apply the profile preset to commands from the Home Assistant dashboard",
+            "transition_ms": "Leave blank or enter 0 for an instant transition",
+            "configure_effects": "Enable to configure an effect for the selected lights, if available. When disabled, previously selected effects are not applied"
+          }
+        },
+        "reconfigure": {
+          "title": "Lighting group setup",
+          "data": {
+            "name": "Group name",
+            "lights": "Lights",
+            "brightness": "Brightness",
+            "temperature": "Color temperature (K)",
+            "color": "RGB color",
+            "sources": "Turn-on source filter",
+            "include_ui": "Apply settings when turned on from the interface",
+            "transition_ms": "Transition duration (ms)",
+            "configure_effects": "Configure light effects"
+          },
+          "data_description": {
+            "temperature": "Leave blank or enter 0 to use RGB",
+            "sources": "Leave empty to apply settings regardless of the turn-on source. You can choose devices, entities, automations, and scripts",
+            "include_ui": "Enable to apply the profile preset to commands from the Home Assistant dashboard",
+            "transition_ms": "Leave blank or enter 0 for an instant transition",
+            "configure_effects": "Enable to configure an effect for the selected lights, if available. When disabled, previously selected effects are not applied"
+          }
+        },
+        "effects": {
+          "title": "Light effects",
+          "description": "Choose the effect to apply when the light turns on. RGB and color temperature settings are ignored when an effect is selected"
+        }
+      },
+      "error": {
+        "empty_name": "Enter a group name.",
+        "select_lights": "Select at least one light.",
+        "duplicate_name": "A group with this name already exists.",
+        "light_already_grouped": "One or more selected lights already belong to another Light Profiles group.",
+        "invalid_temperature": "Enter 0 or a value from 1000 to 10000 kelvin."
+      },
+      "initiate_flow": {
+        "user": "Add a light group",
+        "reconfigure": "Edit a light group"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit a lighting profile",
+        "data": {
+          "name": "Profile name",
+          "priority": "Priority"
+        },
+        "data_description": {
+          "priority": "Higher numbers take precedence"
+        }
+      }
+    },
+    "error": {
+      "empty_profile_name": "Enter a profile name.",
+      "invalid_priority": "Enter a whole number.",
+      "duplicate_priority": "Another profile already uses this priority."
+    }
+  }
+}

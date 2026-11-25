@@ -1,0 +1,13 @@
+{
+  "domain": "light_profile",
+  "name": "Light Profiles",
+  "config_flow": true,
+  "dependencies": [
+    "light"
+  ],
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "version": "1.0",
+  "documentation": "https://github.com/vevsvevs/hass-light-profiles",
+  "issue_tracker": "https://github.com/vevsvevs/hass-light-profiles/issues"
+}
