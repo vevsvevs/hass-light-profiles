@@ -10,7 +10,7 @@ Light Profiles is a custom Home Assistant integration that applies lighting pres
 - Set brightness to 0% to turn off lights in a group when the profile takes over and keep them off on matching turn-on commands.
 - Temporarily disable individual groups from their settings while keeping the rest of the profile active.
 - Filters turn-on commands by device, entity, automation, or script. Commands from the Home Assistant interface are controlled separately.
-- Uses the highest-priority active profile for each light. Already-on lights follow the new profile when it takes over. After the last applicable profile is switched off, original settings are restored immediately for lights that are on and on the next turn-on for lights that are off.
+- Uses the highest-priority active profile for each light. Already-on lights follow the new profile when it takes over. After the last applicable profile is switched off, each affected light follows the latest requested on/off state and settings. If no command arrived while a profile was active, the light returns to its previous state.
 
 ## Example setups
 
