@@ -18,10 +18,15 @@ from homeassistant.components.light.const import DATA_COMPONENT
 from homeassistant.components.websocket_api.commands import handle_call_service
 from homeassistant.components.websocket_api.connection import current_connection
 from homeassistant.const import STATE_OFF, STATE_ON
-from homeassistant.core import Context, HomeAssistant
+from homeassistant.core import Context, HomeAssistant, State
 from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.http import current_request
 from homeassistant.helpers.translation import async_get_translations
+
+from custom_components.light_profile.daylight import (
+    available_effects,
+    reported_settings,
+)
 
 DOMAIN = "light_profile"
 GROUP = "light_group"
@@ -919,3 +924,117 @@ async def test_effect_options_only_show_group_lights_with_translated_labels(ha):
     assert next(iter(entry.subentries.values())).data["effects"] == {
         hue.entity_id: "candle"
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("leave_light_on", "mesh_brightness", "restored"),
+    [(True, 50000, 195), (False, 50000, 195), (True, 1, 1)],
+)
+async def test_restore_fractional_mesh_brightness(
+    ha, leave_light_on, mesh_brightness, restored
+):
+    hass, lights = ha
+    light = lights[MIRROR]
+    entry = await install(hass)
+    result = await add_group(
+        hass,
+        entry,
+        {"name": "Night", "lights": [MIRROR], "brightness": 10, "temperature": 2200},
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+
+    await action(
+        hass,
+        "turn_on",
+        {"entity_id": MIRROR},
+        {"brightness": 195, "color_temp_kelvin": 4000},
+    )
+    # Xiaomi Gateway 3 decodes this model's 16-bit MIoT brightness to a float.
+    original = mesh_brightness / 65535 * 255.0
+    light._attr_brightness = original
+    light.async_write_ha_state()
+    assert hass.states.get(MIRROR).attributes["brightness"] == original
+
+    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    assert light.calls[-1]["brightness"] == 26
+    if not leave_light_on:
+        await action(hass, "turn_off", {"entity_id": MIRROR})
+
+    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    if not leave_light_on:
+        assert hass.states.is_state(MIRROR, STATE_OFF)
+        await action(hass, "turn_on", {"entity_id": MIRROR})
+
+    assert light.calls[-1]["brightness"] == restored
+    assert light.calls[-1]["color_temp_kelvin"] == 4000
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected"),
+    [
+        ({"brightness": "195.5"}, {"brightness": 196}),
+        ({"brightness": True, "color_mode": ["rgb"]}, {}),
+        (
+            {"brightness": 0, "color_mode": "rgb", "rgb_color": [0, 0, 0]},
+            {"rgb_color": (0, 0, 0)},
+        ),
+        ({"brightness": "NaN", "color_mode": "white"}, {}),
+        ({"brightness": 256, "color_mode": "white"}, {}),
+        ({"brightness": "0.1", "color_mode": "white"}, {"white": 1}),
+        (
+            {"color_mode": "color_temp", "color_temp_kelvin": "3999.7"},
+            {"color_temp_kelvin": 4000},
+        ),
+        ({"color_mode": "color_temp", "color_temp_kelvin": 0}, {}),
+        (
+            {"color_mode": "rgbw", "rgbw_color": [1, "2", 3.6, 255]},
+            {"rgbw_color": (1, 2, 4, 255)},
+        ),
+        (
+            {"color_mode": "rgbww", "rgbww_color": (1, 2, 3, 4, 5)},
+            {"rgbww_color": (1, 2, 3, 4, 5)},
+        ),
+        ({"color_mode": "rgbww", "rgbww_color": (1, 2, 3, 4)}, {}),
+        ({"color_mode": "hs", "hs_color": ["360", 10.5]}, {"hs_color": (360, 10.5)}),
+        ({"color_mode": "hs", "hs_color": [361, 0]}, {}),
+        ({"color_mode": "xy", "xy_color": (0.15, "0.44")}, {"xy_color": (0.15, 0.44)}),
+        ({"color_mode": "xy", "xy_color": (float("inf"), 0.44)}, {}),
+        ({"effect": "Rainbow", "effect_list": "Rainbow"}, {}),
+        (
+            {"effect": "Rainbow", "effect_list": ["Rainbow", {}, False]},
+            {"effect": "Rainbow"},
+        ),
+    ],
+)
+def test_reported_settings_normalizes_light_attributes(attributes, expected):
+    assert reported_settings(State(MIRROR, STATE_ON, attributes)) == expected
+
+
+def test_available_effects_keeps_only_unique_nonempty_names():
+    state = State(
+        MIRROR, STATE_ON, {"effect_list": ["Off", "", [], " ", "Off", "Color"]}
+    )
+    assert available_effects(state) == ("Off", "Color")
+
+
+@pytest.mark.asyncio
+async def test_restore_valid_brightness_when_reported_color_is_invalid(ha):
+    hass, lights = ha
+    light = lights[MIRROR]
+    entry = await install(hass)
+    await add_group(
+        hass, entry, {"name": "Night", "lights": [MIRROR], "brightness": 10}
+    )
+    await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 195})
+    hass.states.async_set(
+        MIRROR,
+        STATE_ON,
+        {"color_mode": "rgb", "rgb_color": [999, 0, 0], "brightness": "195"},
+    )
+    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    assert light.calls[-1]["brightness"] == 26
+
+    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+
+    assert light.calls[-1] == {"brightness": 195}
