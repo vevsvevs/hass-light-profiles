@@ -40,6 +40,7 @@ from .const import (
     DOMAIN,
     EFFECTS,
     GROUP,
+    GROUP_ENABLED,
     INCLUDE_UI,
     LIGHTS,
     SOURCES,
@@ -70,15 +71,20 @@ class Group:
     sources: frozenset[str]
     include_ui: bool
     effects: Mapping[str, str]
+    enabled: bool
 
     @classmethod
     def from_config(cls, data: Mapping[str, Any]) -> "Group":
-        preset = {Arg.BRIGHTNESS: round(255 * data[BRIGHTNESS] / 100)}
-        if temperature := data.get(TEMPERATURE):
-            preset[Arg.COLOR_TEMP_KELVIN] = int(temperature)
-        elif COLOR in data:
-            preset[Arg.RGB_COLOR] = tuple(data[COLOR])
-        preset[Arg.TRANSITION] = data.get(TRANSITION_MS, 0) / 1000
+        level = data[BRIGHTNESS]
+        preset = {
+            Arg.BRIGHTNESS: max(1, round(255 * level / 100)) if level else 0,
+            Arg.TRANSITION: data.get(TRANSITION_MS, 0) / 1000,
+        }
+        if level:
+            if temperature := data.get(TEMPERATURE):
+                preset[Arg.COLOR_TEMP_KELVIN] = int(temperature)
+            elif COLOR in data:
+                preset[Arg.RGB_COLOR] = tuple(data[COLOR])
         effects = data.get(EFFECTS, {})
         return cls(
             frozenset(data[LIGHTS]),
@@ -86,10 +92,13 @@ class Group:
             frozenset(data.get(SOURCES, ())),
             data[INCLUDE_UI],
             effects if data.get(CONFIGURE_EFFECTS, bool(effects)) else {},
+            data.get(GROUP_ENABLED, True),
         )
 
     def preset_for(self, state: State | None, entity_id: str) -> dict[str, Any]:
-        """Send a device effect only while the device still advertises it."""
+        """Use an advertised device effect for a preset that turns the light on."""
+        if self.preset[Arg.BRIGHTNESS] == 0:
+            return self.preset
         effect = self.effects.get(entity_id)
         if effect is None or effect not in (available_effects(state) or ()):
             return self.preset
@@ -232,6 +241,7 @@ class LightProfiles:
             entity_id: group
             for profile in active
             for entity_id, group in profile.lights.items()
+            if group.enabled
         }
         if self._profiles and (next_lights or self._pending):
             try:
@@ -383,7 +393,7 @@ class LightProfiles:
     def _with_handoff(self, entity_id: str, preset: dict[str, Any]) -> dict[str, Any]:
         """Clear the previous profile's appearance when the winner changes it."""
         previous = self._applied.get(entity_id)
-        if not previous or Arg.EFFECT in preset:
+        if not previous or Arg.EFFECT in preset or preset[Arg.BRIGHTNESS] == 0:
             return preset
         effects = available_effects(self.hass.states.get(entity_id)) or ()
         if not COLOR_PARAMS.intersection(preset):
@@ -521,6 +531,9 @@ def _requests_off(params: Mapping[str, Any]) -> bool:
 def _with_preset(
     call: ServiceCall, params: dict[str, Any], preset: dict[str, Any]
 ) -> ServiceCall:
+    if preset[Arg.BRIGHTNESS] == 0:
+        # Core treats zero brightness as a turn-off request for this light.
+        return _with_params(call, preset)
     new_params = dict(params)
     for key in (Arg.BRIGHTNESS_PCT, Arg.BRIGHTNESS_STEP, Arg.BRIGHTNESS_STEP_PCT):
         new_params.pop(key, None)

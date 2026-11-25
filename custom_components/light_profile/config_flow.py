@@ -34,6 +34,7 @@ from .const import (
     EFFECTS,
     ENTITY_PREFIX,
     GROUP,
+    GROUP_ENABLED,
     INCLUDE_UI,
     LIGHTS,
     PRIORITY,
@@ -45,7 +46,7 @@ from .daylight import available_effects
 
 PRESET_FIELDS = {
     vol.Optional(BRIGHTNESS, default=10): selector.NumberSelector(
-        {"min": 1, "max": 100, "unit_of_measurement": "%"}
+        {"min": 0, "max": 100, "unit_of_measurement": "%"}
     ),
     vol.Optional(TEMPERATURE): selector.NumberSelector(
         {"min": 0, "max": 10000, "mode": "box"}
@@ -265,6 +266,7 @@ class LightGroupFlow(ConfigSubentryFlow):
         saved = subentry.data.get(EFFECTS, {}) if subentry else {}
         if subentry:
             defaults.setdefault(CONFIGURE_EFFECTS, bool(saved))
+            defaults.setdefault(GROUP_ENABLED, True)
 
         if user_input is not None:
             defaults = user_input
@@ -320,6 +322,7 @@ class LightGroupFlow(ConfigSubentryFlow):
 
         fields = {
             vol.Optional(CONF_NAME): selector.TextSelector(),
+            vol.Optional(GROUP_ENABLED, default=True): selector.BooleanSelector(),
             vol.Optional(LIGHTS): selector.EntitySelector(
                 {"multiple": True, "filter": {"domain": "light"}}
             ),
