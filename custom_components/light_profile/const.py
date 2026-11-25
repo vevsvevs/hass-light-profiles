@@ -2,6 +2,7 @@
 
 DOMAIN = "light_profile"
 GROUP = "light_group"
+GROUP_ENABLED = "enabled"
 
 LIGHTS = "lights"
 SOURCES = "sources"

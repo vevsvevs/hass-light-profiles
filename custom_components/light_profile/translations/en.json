@@ -30,6 +30,7 @@
           "title": "Lighting group setup",
           "data": {
             "name": "Group name",
+            "enabled": "Group enabled",
             "lights": "Lights",
             "brightness": "Brightness",
             "temperature": "Color temperature (K)",
@@ -40,6 +41,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
+            "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
             "sources": "Leave empty to apply settings regardless of the turn-on source. You can choose devices, entities, automations, and scripts",
             "include_ui": "Enable to apply the profile preset to commands from the Home Assistant dashboard",
@@ -51,6 +53,7 @@
           "title": "Lighting group setup",
           "data": {
             "name": "Group name",
+            "enabled": "Group enabled",
             "lights": "Lights",
             "brightness": "Brightness",
             "temperature": "Color temperature (K)",
@@ -61,6 +64,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
+            "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
             "sources": "Leave empty to apply settings regardless of the turn-on source. You can choose devices, entities, automations, and scripts",
             "include_ui": "Enable to apply the profile preset to commands from the Home Assistant dashboard",

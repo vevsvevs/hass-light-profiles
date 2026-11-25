@@ -52,6 +52,7 @@ class TestLight(LightEntity):
         self._attr_name = entity_id.split(".", 1)[1].title()
         self._attr_unique_id = entity_id
         self.calls = []
+        self.off_calls = []
         self.called = asyncio.Event()
 
     async def async_turn_on(self, **kwargs):
@@ -71,6 +72,7 @@ class TestLight(LightEntity):
         self.called.set()
 
     async def async_turn_off(self, **kwargs):
+        self.off_calls.append(kwargs)
         self._attr_is_on = False
         self.async_write_ha_state()
 
@@ -1038,3 +1040,87 @@ async def test_restore_valid_brightness_when_reported_color_is_invalid(ha):
     await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
 
     assert light.calls[-1] == {"brightness": 195}
+
+
+@pytest.mark.asyncio
+async def test_zero_brightness_turns_off_only_its_group_and_restores_on_next_turn_on(
+    ha,
+):
+    hass, lights = ha
+    entry = await install(hass)
+    result = await add_group(
+        hass,
+        entry,
+        {
+            "name": "Off",
+            "lights": [MIRROR, HALL],
+            "brightness": 0,
+            "color": [255, 0, 0],
+            "transition_ms": 1500,
+        },
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert next(iter(entry.subentries.values())).data["brightness"] == 0
+    await add_group(hass, entry, {"name": "Dim", "lights": [SHOWER], "brightness": 10})
+    await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 195})
+    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    assert hass.states.is_state(MIRROR, STATE_OFF)
+    assert lights[MIRROR].off_calls == [{"transition": 1.5}]
+    assert lights[HALL].off_calls == []
+
+    for command in ("turn_on", "toggle"):
+        await action(
+            hass,
+            command,
+            {"entity_id": [MIRROR, SHOWER] if command == "turn_on" else MIRROR},
+            {"brightness_pct": 75, "rgb_color": [0, 0, 255]},
+        )
+        assert hass.states.is_state(MIRROR, STATE_OFF)
+    assert len(lights[MIRROR].calls) == 1
+    assert lights[SHOWER].calls[-1]["brightness"] == 26
+
+    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    assert hass.states.is_state(MIRROR, STATE_OFF)
+    await action(hass, "turn_on", {"entity_id": MIRROR})
+    assert lights[MIRROR].calls[-1]["brightness"] == 195
+
+
+@pytest.mark.asyncio
+async def test_disabling_one_group_preserves_its_settings_and_other_groups(ha):
+    hass, lights = ha
+    low = await install(hass, title="Evening", priority=10)
+    high = await install(hass, title="Night", priority=30)
+    group_data = {"name": "Mirror", "lights": [MIRROR], "brightness": 10}
+    await add_group(hass, low, group_data | {"brightness": 40})
+    await add_group(hass, high, group_data)
+    await add_group(
+        hass, high, {"name": "Shower", "lights": [SHOWER], "brightness": 20}
+    )
+    group = next(item for item in high.subentries.values() if item.title == "Mirror")
+    context = {"source": "reconfigure", "subentry_id": group.subentry_id}
+    await action(hass, "turn_on", {"entity_id": [MIRROR, SHOWER]}, {"brightness": 185})
+    await action(
+        hass,
+        "turn_on",
+        {"entity_id": ["switch.evening", "switch.night"]},
+        domain="switch",
+    )
+    assert lights[MIRROR].calls[-1]["brightness"] == 26
+
+    for enabled, expected in ((False, 102), (True, 26)):
+        form = await hass.config_entries.subentries.async_init(
+            (high.entry_id, GROUP), context=context
+        )
+        marker = next(
+            field for field in form["data_schema"].schema if field == "enabled"
+        )
+        assert marker.description["suggested_value"] is not enabled
+        await hass.config_entries.subentries.async_configure(
+            form["flow_id"], group_data | {"enabled": enabled}
+        )
+        await hass.async_block_till_done()
+        assert high.subentries[group.subentry_id].data["enabled"] is enabled
+        assert high.subentries[group.subentry_id].data["brightness"] == 10
+        assert hass.states.is_state("switch.night", STATE_ON)
+        assert lights[MIRROR].calls[-1]["brightness"] == expected
+        assert lights[SHOWER].calls[-1]["brightness"] == 51
