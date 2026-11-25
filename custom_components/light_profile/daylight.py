@@ -46,8 +46,11 @@ def reported_settings(state: State | None) -> dict[str, Any]:
     settings = {}
     brightness = attrs.get(Arg.BRIGHTNESS)
     mode = attrs.get("color_mode")
-    if isinstance(brightness, int) and brightness > 0:
-        settings[Arg.WHITE if mode == ColorMode.WHITE else Arg.BRIGHTNESS] = brightness
+    if isinstance(brightness, (int, float)) and 0 < brightness <= 255:
+        # Some lights report fractional brightness. A restore command uses an integer,
+        # and rounding a positive brightness to zero would turn the light off.
+        key = Arg.WHITE if mode == ColorMode.WHITE else Arg.BRIGHTNESS
+        settings[key] = max(1, round(brightness))
     if (color := COLOR_BY_MODE.get(mode)) and (value := attrs.get(color)) is not None:
         settings[color] = value
     effects = available_effects(state) or ()

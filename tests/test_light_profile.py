@@ -919,3 +919,47 @@ async def test_effect_options_only_show_group_lights_with_translated_labels(ha):
     assert next(iter(entry.subentries.values())).data["effects"] == {
         hue.entity_id: "candle"
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("leave_light_on", "mesh_brightness", "restored"),
+    [(True, 50000, 195), (False, 50000, 195), (True, 1, 1)],
+)
+async def test_restore_fractional_mesh_brightness(
+    ha, leave_light_on, mesh_brightness, restored
+):
+    hass, lights = ha
+    light = lights[MIRROR]
+    entry = await install(hass)
+    result = await add_group(
+        hass,
+        entry,
+        {"name": "Night", "lights": [MIRROR], "brightness": 10, "temperature": 2200},
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+
+    await action(
+        hass,
+        "turn_on",
+        {"entity_id": MIRROR},
+        {"brightness": 195, "color_temp_kelvin": 4000},
+    )
+    # Xiaomi Gateway 3 decodes this model's 16-bit MIoT brightness to a float.
+    original = mesh_brightness / 65535 * 255.0
+    light._attr_brightness = original
+    light.async_write_ha_state()
+    assert hass.states.get(MIRROR).attributes["brightness"] == original
+
+    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    assert light.calls[-1]["brightness"] == 26
+    if not leave_light_on:
+        await action(hass, "turn_off", {"entity_id": MIRROR})
+
+    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    if not leave_light_on:
+        assert hass.states.is_state(MIRROR, STATE_OFF)
+        await action(hass, "turn_on", {"entity_id": MIRROR})
+
+    assert light.calls[-1]["brightness"] == restored
+    assert light.calls[-1]["color_temp_kelvin"] == 4000
