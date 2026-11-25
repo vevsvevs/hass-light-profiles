@@ -1,5 +1,7 @@
 """Read the light settings that Home Assistant actually reported."""
 
+from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 from homeassistant.components.light import ATTR_EFFECT_LIST, ColorMode
@@ -21,13 +23,66 @@ COLOR_PARAMS = frozenset(
 BRIGHTNESS_PARAMS = frozenset(
     (Arg.BRIGHTNESS, Arg.BRIGHTNESS_PCT, Arg.BRIGHTNESS_STEP, Arg.BRIGHTNESS_STEP_PCT)
 )
+_COLOR_LIMITS = {
+    Arg.HS_COLOR: (360, 100),
+    Arg.RGB_COLOR: (255,) * 3,
+    Arg.RGBW_COLOR: (255,) * 4,
+    Arg.RGBWW_COLOR: (255,) * 5,
+    Arg.XY_COLOR: (1, 1),
+}
+
+
+def _number(value: Any) -> int | float | None:
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    if type(value) is int or (type(value) is float and isfinite(value)):
+        return value
+    return None
+
+
+def normalize_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep reported settings that can safely be sent to light.turn_on."""
+    normalized = {}
+    for key, value in settings.items():
+        if key in (Arg.BRIGHTNESS, Arg.WHITE):
+            if (level := _number(value)) is not None and 0 < level <= 255:
+                # Zero brightness would turn a light off rather than restore it.
+                normalized[key] = max(1, round(level))
+        elif key == Arg.COLOR_TEMP_KELVIN:
+            if (temperature := _number(value)) is not None and temperature >= 1:
+                normalized[key] = round(temperature)
+        elif key in _COLOR_LIMITS:
+            limits = _COLOR_LIMITS[key]
+            if isinstance(value, (list, tuple)) and len(value) == len(limits):
+                channels = tuple(_number(channel) for channel in value)
+                if all(
+                    channel is not None and 0 <= channel <= limit
+                    for channel, limit in zip(channels, limits, strict=True)
+                ):
+                    normalized[key] = (
+                        channels
+                        if key in (Arg.HS_COLOR, Arg.XY_COLOR)
+                        else tuple(round(channel) for channel in channels)
+                    )
+        elif key == Arg.EFFECT and isinstance(value, str) and value.strip():
+            normalized[key] = value
+    return normalized
 
 
 def available_effects(state: State | None) -> tuple[str, ...] | None:
     """Read the device's effect names, distinguishing an unknown capability."""
-    if state is None or (effects := state.attributes.get(ATTR_EFFECT_LIST)) is None:
+    if state is None or not isinstance(
+        effects := state.attributes.get(ATTR_EFFECT_LIST), (list, tuple)
+    ):
         return None
-    return tuple(dict.fromkeys(effect for effect in effects if effect))
+    return tuple(
+        dict.fromkeys(
+            effect for effect in effects if isinstance(effect, str) and effect.strip()
+        )
+    )
 
 
 def effect_off(effects: tuple[str, ...]) -> str | None:
@@ -43,16 +98,11 @@ def reported_settings(state: State | None) -> dict[str, Any]:
         return {}
 
     attrs = state.attributes
-    settings = {}
-    brightness = attrs.get(Arg.BRIGHTNESS)
     mode = attrs.get("color_mode")
-    if isinstance(brightness, (int, float)) and 0 < brightness <= 255:
-        # Some lights report fractional brightness. A restore command uses an integer,
-        # and rounding a positive brightness to zero would turn the light off.
-        key = Arg.WHITE if mode == ColorMode.WHITE else Arg.BRIGHTNESS
-        settings[key] = max(1, round(brightness))
-    if (color := COLOR_BY_MODE.get(mode)) and (value := attrs.get(color)) is not None:
-        settings[color] = value
+    key = Arg.WHITE if mode == ColorMode.WHITE else Arg.BRIGHTNESS
+    settings = {key: attrs.get(Arg.BRIGHTNESS)}
+    if isinstance(mode, str) and (color := COLOR_BY_MODE.get(mode)):
+        settings[color] = attrs.get(color)
     effects = available_effects(state) or ()
     effect = attrs.get(Arg.EFFECT)
     if effect in effects:
@@ -60,15 +110,12 @@ def reported_settings(state: State | None) -> dict[str, Any]:
     elif effect is None and state.state == STATE_ON:
         if off := effect_off(effects):
             settings[Arg.EFFECT] = off
-    return settings
+    return normalize_settings(settings)
 
 
 def restore_missing(params: dict[str, Any], saved: dict[str, Any]) -> dict[str, Any]:
     """Use daylight settings for arguments the next turn-on leaves unspecified."""
-    defaults = {
-        key: tuple(value) if isinstance(value, list) else value
-        for key, value in saved.items()
-    }
+    defaults = saved.copy()
     has_brightness = bool(BRIGHTNESS_PARAMS.intersection(params) or Arg.WHITE in params)
     has_color = bool((COLOR_PARAMS | {Arg.EFFECT}).intersection(params))
     if has_color:

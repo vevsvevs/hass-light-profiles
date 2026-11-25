@@ -50,6 +50,7 @@ from .daylight import (
     COLOR_PARAMS,
     available_effects,
     effect_off,
+    normalize_settings,
     reported_settings,
     restore_missing,
 )
@@ -131,9 +132,14 @@ class LightProfiles:
     async def async_load(self) -> None:
         if data := await self._store.async_load():
             self._enabled = set(data["enabled"])
-            self._last_day = data["last_day"]
-            self._baseline = data["baseline"]
-            self._pending = data["pending"]
+            self._last_day, self._baseline, self._pending = (
+                {
+                    entity_id: normalized
+                    for entity_id, settings in data[key].items()
+                    if (normalized := normalize_settings(settings))
+                }
+                for key in ("last_day", "baseline", "pending")
+            )
             self._applied = data["applied"]
 
     @callback
