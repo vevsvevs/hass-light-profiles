@@ -255,7 +255,7 @@ class LightProfiles:
             for profile in self._profiles.values()
             for entity_id in profile.lights
         }
-        if tracked or self._pending or self._lights:
+        if next_lights or self._pending:
             try:
                 self._ensure_interception()
             except RuntimeError as err:
@@ -299,7 +299,6 @@ class LightProfiles:
         self._lights = next_lights
         self._update_tracking(tracked)
         self._update_listener()
-        self._remove_interception_if_idle()
         if apply:
             for entity_id, group in next_lights.items():
                 old_group = previous.get(entity_id)
@@ -329,7 +328,7 @@ class LightProfiles:
 
     @callback
     def _remove_interception_if_idle(self) -> None:
-        if not self._tracked and not self._pending:
+        if not self._lights and not self._pending:
             self._detach_interception()
 
     @callback
@@ -445,9 +444,7 @@ class LightProfiles:
     ) -> None:
         """Update stable light settings from the command before applying a preset."""
         entity_id = light.entity_id
-        active = entity_id in self._lights
-        desired = self._desired_settings if active else self._last_day
-        saved = desired.get(entity_id, {})
+        saved = self._desired_settings.get(entity_id, {})
         turn_on = service == SERVICE_TURN_ON or (
             service == SERVICE_TOGGLE and not light.is_on
         )
@@ -474,9 +471,9 @@ class LightProfiles:
                 settings[Arg.WHITE] = settings.pop(Arg.BRIGHTNESS)
             updated = restore_missing(settings, saved)
             if updated != saved:
-                desired[entity_id] = updated
+                self._desired_settings[entity_id] = updated
                 self._store.async_delay_save(self._storage_data, 5)
-        if active and self._desired_power.get(entity_id) != turn_on:
+        if self._desired_power.get(entity_id) != turn_on:
             self._desired_power[entity_id] = turn_on
             self._store.async_delay_save(self._storage_data, 5)
 
@@ -499,8 +496,8 @@ class LightProfiles:
                 )
             elif not _requests_off(params):
                 saved = self._pending.get(entity_id)
-        elif entity_id in self._tracked or entity_id in self._pending:
-            if entity_id in self._tracked:
+        elif entity_id in self._lights or entity_id in self._pending:
+            if entity_id in self._lights:
                 self._remember_request(light, call.service, params)
             turning_on = call.service != SERVICE_TURN_OFF and not light.is_on
             if turning_on and entity_id in self._lights and not _requests_off(params):

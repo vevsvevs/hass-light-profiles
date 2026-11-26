@@ -424,7 +424,7 @@ async def test_script_and_automation_sources_match_only_their_branch(ha):
 async def test_daylight_is_restored_without_turning_off_lights_on(ha):
     hass, lights = ha
     services = hass.services.async_services_for_domain("light")
-    names = ("turn_on", "toggle")
+    names = ("turn_on", "turn_off", "toggle")
     original = tuple(services[name].job for name in names)
 
     def current_jobs():
@@ -444,6 +444,7 @@ async def test_daylight_is_restored_without_turning_off_lights_on(ha):
         },
     )
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert current_jobs() == original
     await action(
         hass,
         "turn_on",
@@ -487,14 +488,14 @@ async def test_daylight_is_restored_without_turning_off_lights_on(ha):
     assert current_jobs() != original
     await action(hass, "turn_on", {"entity_id": SHOWER}, {"brightness": 99})
     assert lights[SHOWER].calls[-1] == {"brightness": 99, "rgb_color": (40, 80, 90)}
-    assert current_jobs() != original
+    assert current_jobs() == original
     await action(hass, "turn_off", {"entity_id": SHOWER})
     await action(hass, "turn_on", {"entity_id": SHOWER})
     assert lights[SHOWER].calls[-1] == {}
 
 
 @pytest.mark.asyncio
-async def test_interception_stays_for_configured_lights_until_profile_is_unloaded(ha):
+async def test_interception_stops_when_no_active_profile_or_restore_remains(ha):
     hass, lights = ha
     service = hass.services.async_services_for_domain("light")["turn_on"]
     original = service.job
@@ -503,7 +504,7 @@ async def test_interception_stays_for_configured_lights_until_profile_is_unloade
         hass, entry, {"name": "Room", "lights": [HALL], "brightness": 10}
     )
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
-    assert service.job is not original
+    assert service.job is original
 
     await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
     assert service.job is not original
@@ -511,7 +512,7 @@ async def test_interception_stays_for_configured_lights_until_profile_is_unloade
     assert lights[HALL].calls[-1]["brightness"] == 26
     await action(hass, "turn_off", {"entity_id": HALL})
     await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
-    assert service.job is not original
+    assert service.job is original
     assert hass.states.is_state(HALL, STATE_OFF)
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert service.job is original
