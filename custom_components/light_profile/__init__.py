@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
 from homeassistant.helpers.typing import ConfigType
 
-from .const import PRIORITY
+from .const import DATA_ASSIST, PRIORITY
 from .controller import LightProfiles
 
 PLATFORMS = (Platform.SWITCH,)
@@ -19,6 +19,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     controller = LightProfiles(hass)
     await controller.async_load()
     hass.data[DATA_CONTROLLER] = controller
+    if "conversation" in hass.config.components:
+        from .assist import VoiceCommands
+
+        hass.data[DATA_ASSIST] = VoiceCommands(hass)
     return True
 
 

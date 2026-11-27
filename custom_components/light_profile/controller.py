@@ -32,6 +32,7 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.service import entity_service_call
 from homeassistant.helpers.storage import Store
@@ -43,9 +44,11 @@ from .const import (
     DOMAIN,
     EFFECTS,
     GROUP,
+    GROUP_AREA,
     GROUP_ENABLED,
     INCLUDE_UI,
     LIGHTS,
+    PROFILE_STATE_UPDATED,
     SOURCES,
     TEMPERATURE,
     TRANSITION_MS,
@@ -75,6 +78,7 @@ class Group:
     include_ui: bool
     effects: Mapping[str, str]
     enabled: bool
+    area_id: str | None
 
     @classmethod
     def from_config(cls, data: Mapping[str, Any]) -> "Group":
@@ -96,6 +100,7 @@ class Group:
             data[INCLUDE_UI],
             effects if data.get(CONFIGURE_EFFECTS, bool(effects)) else {},
             data.get(GROUP_ENABLED, True),
+            data.get(GROUP_AREA),
         )
 
     def preset_for(self, state: State | None, entity_id: str) -> dict[str, Any]:
@@ -125,6 +130,7 @@ class LightProfiles:
         self.hass = hass
         self._profiles: dict[str, Profile] = {}
         self._enabled: set[str] = set()
+        self._area_overrides: dict[str, dict[str, bool]] = {}
         self._lights: dict[str, Group] = {}
         self._tracked: set[str] = set()
         self._sources = SourceTracker(hass)
@@ -145,6 +151,7 @@ class LightProfiles:
     async def async_load(self) -> None:
         if data := await self._store.async_load():
             self._enabled = set(data["enabled"])
+            self._area_overrides = data.get("area_overrides", {})
             self._last_day, self._desired_settings, self._pending = (
                 {
                     entity_id: normalized
@@ -160,6 +167,7 @@ class LightProfiles:
     def _storage_data(self) -> dict[str, Any]:
         return {
             "enabled": sorted(self._enabled),
+            "area_overrides": dict(self._area_overrides),
             "last_day": dict(self._last_day),
             "baseline": dict(self._desired_settings),
             "desired_power": dict(self._desired_power),
@@ -171,8 +179,22 @@ class LightProfiles:
         await self._store.async_save(self._storage_data())
 
     @callback
-    def is_enabled(self, entry_id: str) -> bool:
-        return entry_id in self._enabled
+    def is_enabled(self, entry_id: str, area_id: str | None = None) -> bool:
+        if area_id is not None:
+            return self._area_is_on(entry_id, area_id)
+        profile = self._profiles.get(entry_id)
+        areas = (
+            {group.area_id for group in profile.lights.values()} if profile else set()
+        )
+        return all(self._area_is_on(entry_id, area) for area in areas or {None})
+
+    def _area_is_on(self, entry_id: str, area_id: str | None) -> bool:
+        enabled = entry_id in self._enabled
+        return (
+            self._area_overrides.get(entry_id, {}).get(area_id, enabled)
+            if area_id is not None
+            else enabled
+        )
 
     async def async_set_profile(
         self, entry_id: str, priority: int, subentries: Mapping[str, ConfigSubentry]
@@ -199,6 +221,7 @@ class LightProfiles:
                 else:
                     self._profiles[entry_id] = previous
                 raise
+            async_dispatcher_send(self.hass, PROFILE_STATE_UPDATED, entry_id)
 
     async def async_unload_profile(self, entry_id: str) -> None:
         async with self._lock:
@@ -208,6 +231,7 @@ class LightProfiles:
     async def async_forget_profile(self, entry_id: str) -> None:
         async with self._lock:
             self._enabled.discard(entry_id)
+            self._area_overrides.pop(entry_id, None)
             if not self.hass.config_entries.async_entries(DOMAIN):
                 self._last_day.clear()
                 self._desired_settings.clear()
@@ -218,37 +242,53 @@ class LightProfiles:
             else:
                 await self.async_save()
 
-    async def async_set_enabled(self, entry_id: str, enabled: bool) -> None:
+    async def async_set_enabled(
+        self, entry_id: str, enabled: bool, area_id: str | None = None
+    ) -> None:
         async with self._lock:
-            if self.is_enabled(entry_id) == enabled:
-                return
-            if enabled:
-                self._enabled.add(entry_id)
+            was_enabled = entry_id in self._enabled
+            previous = self._area_overrides.get(entry_id, {})
+            if area_id is None:
+                if was_enabled == enabled and not previous:
+                    return
+                self._area_overrides.pop(entry_id, None)
+                if enabled:
+                    self._enabled.add(entry_id)
+                else:
+                    self._enabled.discard(entry_id)
             else:
-                self._enabled.discard(entry_id)
+                if self._area_is_on(entry_id, area_id) == enabled:
+                    return
+                overrides = previous.copy()
+                if enabled == was_enabled:
+                    overrides.pop(area_id)
+                else:
+                    overrides[area_id] = enabled
+                if overrides:
+                    self._area_overrides[entry_id] = overrides
+                else:
+                    self._area_overrides.pop(entry_id, None)
             try:
                 await self._reconcile()
             except HomeAssistantError:
-                if enabled:
-                    self._enabled.discard(entry_id)
-                else:
+                if was_enabled:
                     self._enabled.add(entry_id)
+                else:
+                    self._enabled.discard(entry_id)
+                if previous:
+                    self._area_overrides[entry_id] = previous
+                else:
+                    self._area_overrides.pop(entry_id, None)
                 raise
+            async_dispatcher_send(self.hass, PROFILE_STATE_UPDATED, entry_id)
 
     async def _reconcile(self, *, apply: bool = True) -> None:
-        active = sorted(
-            (
-                profile
-                for key, profile in self._profiles.items()
-                if key in self._enabled
-            ),
-            key=lambda profile: profile.priority,
-        )
+        profiles = sorted(self._profiles.items(), key=lambda item: item[1].priority)
         next_lights = {
             entity_id: group
-            for profile in active
+            for entry_id, profile in profiles
             for entity_id, group in profile.lights.items()
-            if group.enabled
+            if group.enabled and self._area_is_on(entry_id, group.area_id)
         }
         tracked = {
             entity_id

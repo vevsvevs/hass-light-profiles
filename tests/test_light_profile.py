@@ -4,13 +4,14 @@ import asyncio
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import probatio as vol
 import pytest
 import pytest_asyncio
 from aiohttp.test_utils import make_mocked_request
 from homeassistant import bootstrap, config_entries, data_entry_flow, loader
+from homeassistant.components.conversation import async_converse
 from homeassistant.components.frontend.storage import async_user_store
 from homeassistant.components.http import KEY_HASS_USER
 from homeassistant.components.light import ColorMode, LightEntity, LightEntityFeature
@@ -78,14 +79,29 @@ class TestLight(LightEntity):
 
 
 @pytest_asyncio.fixture
-async def ha(tmp_path: Path):
+async def ha(tmp_path: Path, monkeypatch):
     """Start a local Home Assistant and register three test lights."""
     integration = Path(__file__).parents[1] / "custom_components" / DOMAIN
     shutil.copytree(integration, tmp_path / "custom_components" / DOMAIN)
     hass = HomeAssistant(str(tmp_path))
+    hass.config.skip_pip = True
     loader.async_setup(hass)
+    monkeypatch.setattr(
+        "homeassistant.components.network.network.async_load_adapters",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        "homeassistant.components.network.util.async_get_source_ip",
+        lambda target: "127.0.0.1",
+    )
+    for method in ("async_bind", "start"):
+        monkeypatch.setattr(
+            f"homeassistant.components.http.server.HomeAssistantHTTP.{method}",
+            AsyncMock(),
+        )
     config = {
         "light": {},
+        "conversation": {},
         "script": {
             "outer": {
                 "sequence": [
@@ -1191,3 +1207,79 @@ async def test_disabling_one_group_preserves_its_settings_and_other_groups(ha):
         assert hass.states.is_state("switch.night", STATE_ON)
         assert lights[MIRROR].calls[-1]["brightness"] == expected
         assert lights[SHOWER].calls[-1]["brightness"] == 51
+
+
+@pytest.mark.asyncio
+async def test_local_assist_controls_rooms_and_the_whole_profile(ha):
+    hass, lights = ha
+    areas = area_registry.async_get(hass)
+    living = areas.async_create("Гостиная")
+    office = areas.async_create("Кабинет", aliases={"кабинете"})
+    entry = await install(hass, title="Ночной режим")
+    for name, entity, area, level in (
+        ("Mirror", MIRROR, living, 10),
+        ("Shower", SHOWER, living, 20),
+        ("Hall", HALL, office, 30),
+    ):
+        result = await add_group(
+            hass,
+            entry,
+            {
+                "name": name,
+                "lights": [entity],
+                "area": area.id,
+                "brightness": level,
+            },
+        )
+        assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+
+    registry = entity_registry.async_get(hass)
+    overall = registry.async_get_entity_id("switch", DOMAIN, entry.entry_id)
+    switches = {
+        item.area_id: item.entity_id
+        for item in registry.entities.values()
+        if item.config_entry_id == entry.entry_id and item.area_id
+    }
+    assert set(switches) == {living.id, office.id}
+    assert hass.states.get(switches[living.id]).name == "Ночной режим · Гостиная"
+    await action(
+        hass, "turn_on", {"entity_id": [MIRROR, SHOWER, HALL]}, {"brightness": 200}
+    )
+
+    device = device_registry.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "test-voice-device")},
+    )
+    device_registry.async_get(hass).async_update_device(device.id, area_id=office.id)
+
+    async def say(sentence, language="ru"):
+        result = await async_converse(
+            hass, sentence, None, Context(), language=language, device_id=device.id
+        )
+        await hass.async_block_till_done()
+        assert result.response.response_type.value == "action_done"
+
+    await say("Включи ночной режим в гостиной")
+    assert [
+        lights[entity].calls[-1]["brightness"] for entity in (MIRROR, SHOWER, HALL)
+    ] == [26, 51, 200]
+    assert hass.states.is_state(switches[living.id], STATE_ON)
+    assert hass.states.is_state(switches[office.id], STATE_OFF)
+    assert hass.states.is_state(overall, STATE_OFF)
+
+    await say("Включи ночной режим")
+    assert lights[HALL].calls[-1]["brightness"] == 76
+    assert hass.states.is_state(overall, STATE_ON)
+
+    await say("Выключи ночной режим в кабинете")
+    assert lights[HALL].calls[-1]["brightness"] == 200
+    assert hass.states.is_state(switches[living.id], STATE_ON)
+    assert hass.states.is_state(switches[office.id], STATE_OFF)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.is_state(switches[living.id], STATE_ON)
+    assert hass.states.is_state(switches[office.id], STATE_OFF)
+
+    await say("Выключи ночной режим")
+    assert all(hass.states.is_state(entity, STATE_OFF) for entity in switches.values())
+    assert all(lights[entity].calls[-1]["brightness"] == 200 for entity in lights)

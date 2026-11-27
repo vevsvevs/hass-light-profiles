@@ -30,6 +30,7 @@
           "title": "Lighting group setup",
           "data": {
             "name": "Group name",
+            "area": "Area",
             "enabled": "Group enabled",
             "lights": "Lights",
             "brightness": "Brightness",
@@ -41,6 +42,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
+            "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
             "sources": "Leave empty to apply settings regardless of the turn-on source. You can choose devices, entities, automations, and scripts",
@@ -53,6 +55,7 @@
           "title": "Lighting group setup",
           "data": {
             "name": "Group name",
+            "area": "Area",
             "enabled": "Group enabled",
             "lights": "Lights",
             "brightness": "Brightness",
@@ -64,6 +67,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
+            "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
             "sources": "Leave empty to apply settings regardless of the turn-on source. You can choose devices, entities, automations, and scripts",

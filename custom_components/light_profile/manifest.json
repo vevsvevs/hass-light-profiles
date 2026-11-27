@@ -2,6 +2,7 @@
   "domain": "light_profile",
   "name": "Light Profiles",
   "config_flow": true,
+  "after_dependencies": ["conversation"],
   "dependencies": [
     "light"
   ],

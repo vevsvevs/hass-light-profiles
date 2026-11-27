@@ -34,6 +34,7 @@ from .const import (
     EFFECTS,
     ENTITY_PREFIX,
     GROUP,
+    GROUP_AREA,
     GROUP_ENABLED,
     INCLUDE_UI,
     LIGHTS,
@@ -323,6 +324,7 @@ class LightGroupFlow(ConfigSubentryFlow):
         fields = {
             vol.Optional(CONF_NAME): selector.TextSelector(),
             vol.Optional(GROUP_ENABLED, default=True): selector.BooleanSelector(),
+            vol.Optional(GROUP_AREA): selector.AreaSelector(),
             vol.Optional(LIGHTS): selector.EntitySelector(
                 {"multiple": True, "filter": {"domain": "light"}}
             ),
