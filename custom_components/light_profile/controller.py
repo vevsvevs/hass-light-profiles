@@ -78,10 +78,10 @@ class Group:
     include_ui: bool
     effects: Mapping[str, str]
     enabled: bool
-    area_id: str | None
+    group_id: str
 
     @classmethod
-    def from_config(cls, data: Mapping[str, Any]) -> "Group":
+    def from_config(cls, group_id: str, data: Mapping[str, Any]) -> "Group":
         level = data[BRIGHTNESS]
         preset = {
             Arg.BRIGHTNESS: max(1, round(255 * level / 100)) if level else 0,
@@ -100,7 +100,7 @@ class Group:
             data[INCLUDE_UI],
             effects if data.get(CONFIGURE_EFFECTS, bool(effects)) else {},
             data.get(GROUP_ENABLED, True),
-            data.get(GROUP_AREA),
+            group_id,
         )
 
     def preset_for(self, state: State | None, entity_id: str) -> dict[str, Any]:
@@ -130,7 +130,8 @@ class LightProfiles:
         self.hass = hass
         self._profiles: dict[str, Profile] = {}
         self._enabled: set[str] = set()
-        self._area_overrides: dict[str, dict[str, bool]] = {}
+        self._group_overrides: dict[str, dict[str, bool]] = {}
+        self._legacy_area_overrides: dict[str, dict[str, bool]] = {}
         self._lights: dict[str, Group] = {}
         self._tracked: set[str] = set()
         self._sources = SourceTracker(hass)
@@ -151,7 +152,8 @@ class LightProfiles:
     async def async_load(self) -> None:
         if data := await self._store.async_load():
             self._enabled = set(data["enabled"])
-            self._area_overrides = data.get("area_overrides", {})
+            self._group_overrides = data.get("group_overrides", {})
+            self._legacy_area_overrides = data.get("area_overrides", {})
             self._last_day, self._desired_settings, self._pending = (
                 {
                     entity_id: normalized
@@ -167,7 +169,8 @@ class LightProfiles:
     def _storage_data(self) -> dict[str, Any]:
         return {
             "enabled": sorted(self._enabled),
-            "area_overrides": dict(self._area_overrides),
+            "group_overrides": dict(self._group_overrides),
+            "area_overrides": dict(self._legacy_area_overrides),
             "last_day": dict(self._last_day),
             "baseline": dict(self._desired_settings),
             "desired_power": dict(self._desired_power),
@@ -179,28 +182,27 @@ class LightProfiles:
         await self._store.async_save(self._storage_data())
 
     @callback
-    def is_enabled(self, entry_id: str, area_id: str | None = None) -> bool:
-        if area_id is not None:
-            return self._area_is_on(entry_id, area_id)
+    def is_enabled(self, entry_id: str, group_id: str | None = None) -> bool:
+        if group_id is not None:
+            return self._group_is_on(entry_id, group_id)
         profile = self._profiles.get(entry_id)
-        areas = (
-            {group.area_id for group in profile.lights.values()} if profile else set()
+        if not profile or not profile.lights:
+            return entry_id in self._enabled
+        return all(
+            self._group_is_on(entry_id, group_id)
+            for group_id in {group.group_id for group in profile.lights.values()}
         )
-        return all(self._area_is_on(entry_id, area) for area in areas or {None})
 
-    def _area_is_on(self, entry_id: str, area_id: str | None) -> bool:
-        enabled = entry_id in self._enabled
-        return (
-            self._area_overrides.get(entry_id, {}).get(area_id, enabled)
-            if area_id is not None
-            else enabled
+    def _group_is_on(self, entry_id: str, group_id: str) -> bool:
+        return self._group_overrides.get(entry_id, {}).get(
+            group_id, entry_id in self._enabled
         )
 
     async def async_set_profile(
         self, entry_id: str, priority: int, subentries: Mapping[str, ConfigSubentry]
     ) -> None:
         groups = [
-            Group.from_config(entry.data)
+            Group.from_config(entry.subentry_id, entry.data)
             for entry in subentries.values()
             if entry.subentry_type == GROUP
         ]
@@ -213,9 +215,31 @@ class LightProfiles:
             if profile == previous:
                 return
             self._profiles[entry_id] = profile
+            legacy = self._legacy_area_overrides.pop(entry_id, {})
+            previous_overrides = self._group_overrides.get(entry_id, {})
+            overrides = {
+                group.group_id: previous_overrides[group.group_id]
+                for group in groups
+                if group.group_id in previous_overrides
+            }
+            if legacy:
+                for group in groups:
+                    area_id = subentries[group.group_id].data.get(GROUP_AREA)
+                    if area_id in legacy:
+                        overrides.setdefault(group.group_id, legacy[area_id])
+            if overrides:
+                self._group_overrides[entry_id] = overrides
+            else:
+                self._group_overrides.pop(entry_id, None)
             try:
                 await self._reconcile(apply=self.hass.is_running)
             except HomeAssistantError:
+                if legacy:
+                    self._legacy_area_overrides[entry_id] = legacy
+                if previous_overrides:
+                    self._group_overrides[entry_id] = previous_overrides
+                else:
+                    self._group_overrides.pop(entry_id, None)
                 if previous is None:
                     self._profiles.pop(entry_id)
                 else:
@@ -231,7 +255,8 @@ class LightProfiles:
     async def async_forget_profile(self, entry_id: str) -> None:
         async with self._lock:
             self._enabled.discard(entry_id)
-            self._area_overrides.pop(entry_id, None)
+            self._group_overrides.pop(entry_id, None)
+            self._legacy_area_overrides.pop(entry_id, None)
             if not self.hass.config_entries.async_entries(DOMAIN):
                 self._last_day.clear()
                 self._desired_settings.clear()
@@ -243,31 +268,31 @@ class LightProfiles:
                 await self.async_save()
 
     async def async_set_enabled(
-        self, entry_id: str, enabled: bool, area_id: str | None = None
+        self, entry_id: str, enabled: bool, group_id: str | None = None
     ) -> None:
         async with self._lock:
             was_enabled = entry_id in self._enabled
-            previous = self._area_overrides.get(entry_id, {})
-            if area_id is None:
+            previous = self._group_overrides.get(entry_id, {})
+            if group_id is None:
                 if was_enabled == enabled and not previous:
                     return
-                self._area_overrides.pop(entry_id, None)
+                self._group_overrides.pop(entry_id, None)
                 if enabled:
                     self._enabled.add(entry_id)
                 else:
                     self._enabled.discard(entry_id)
             else:
-                if self._area_is_on(entry_id, area_id) == enabled:
+                if self._group_is_on(entry_id, group_id) == enabled:
                     return
                 overrides = previous.copy()
                 if enabled == was_enabled:
-                    overrides.pop(area_id)
+                    overrides.pop(group_id)
                 else:
-                    overrides[area_id] = enabled
+                    overrides[group_id] = enabled
                 if overrides:
-                    self._area_overrides[entry_id] = overrides
+                    self._group_overrides[entry_id] = overrides
                 else:
-                    self._area_overrides.pop(entry_id, None)
+                    self._group_overrides.pop(entry_id, None)
             try:
                 await self._reconcile()
             except HomeAssistantError:
@@ -276,9 +301,9 @@ class LightProfiles:
                 else:
                     self._enabled.discard(entry_id)
                 if previous:
-                    self._area_overrides[entry_id] = previous
+                    self._group_overrides[entry_id] = previous
                 else:
-                    self._area_overrides.pop(entry_id, None)
+                    self._group_overrides.pop(entry_id, None)
                 raise
             async_dispatcher_send(self.hass, PROFILE_STATE_UPDATED, entry_id)
 
@@ -288,7 +313,7 @@ class LightProfiles:
             entity_id: group
             for entry_id, profile in profiles
             for entity_id, group in profile.lights.items()
-            if group.enabled and self._area_is_on(entry_id, group.area_id)
+            if group.enabled and self._group_is_on(entry_id, group.group_id)
         }
         tracked = {
             entity_id

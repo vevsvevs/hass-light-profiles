@@ -12,11 +12,11 @@ Light Profiles is a custom Home Assistant integration that applies lighting pres
 - Filters turn-on commands by device, entity, automation, or script. Commands from the Home Assistant interface are controlled separately.
 - Uses the highest-priority active profile for each light. Already-on lights follow the new profile when it takes over. After the last applicable profile is switched off, each affected light follows the latest requested on/off state and settings. If no command arrived while a profile was active, the light returns to its previous state.
 
-New switches use stable IDs such as `switch.light_profile_1` and `switch.light_profile_1_living_room`. Renaming a profile updates its display name and voice commands. Existing switch IDs are preserved.
+New switches use stable IDs such as `switch.light_profile_k4f7m2ab` and `switch.light_profile_k4f7m2ab_group_n5q7t3cd`. The **Identifier** row in profile and group settings shows the short code and the current entity ID. Existing main switches keep their IDs. If you used a room switch in an automation, select the new group switches for that room after updating.
 
 ## Local Assist
 
-In a group's settings, select an optional **Area**. The integration creates one switch per profile and area. The switches use the profile name you already set.
+In a group's settings, select an optional **Area**. Each group has its own switch. Voice commands that name an area control all groups currently assigned to it.
 
 - “Turn on Night mode” activates every group in the profile, including groups without an area
 - “Turn on Night mode in the living room” activates only the groups assigned to that area, leaving other areas as they are

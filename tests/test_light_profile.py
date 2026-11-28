@@ -24,6 +24,7 @@ from homeassistant.helpers import area_registry, device_registry, entity_registr
 from homeassistant.helpers.http import current_request
 from homeassistant.helpers.translation import async_get_translations
 
+from custom_components.light_profile.const import group_switch_id, switch_code
 from custom_components.light_profile.daylight import (
     available_effects,
     reported_settings,
@@ -31,8 +32,6 @@ from custom_components.light_profile.daylight import (
 
 DOMAIN = "light_profile"
 GROUP = "light_group"
-MODE = "switch.light_profile_1"
-SECOND_PROFILE = "switch.light_profile_2"
 MIRROR = "light.mirror"
 SHOWER = "light.shower"
 HALL = "light.hall"
@@ -202,6 +201,12 @@ async def install(hass, title="Light Profile", priority=10):
     return entry
 
 
+def profile_switch(hass, entry):
+    return entity_registry.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, entry.entry_id
+    )
+
+
 async def add_group(hass, entry, data):
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, GROUP), context={"source": "user"}
@@ -239,7 +244,9 @@ async def test_sources_match_through_real_automations(ha):
         },
     )
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
 
     for event_data in (
         {"device_id": "different_button", "command": "on"},
@@ -305,7 +312,9 @@ async def test_mixed_area_toggle_edit_and_remove(ha):
     assert lights[MIRROR].calls[-1]["brightness"] == 180
     await action(hass, "turn_off", {"entity_id": MIRROR})
 
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     await action(hass, "toggle", {"area_id": area.id}, {"brightness": 180})
     assert lights[MIRROR].calls[-1]["brightness"] == 13
     assert lights[HALL].calls[-1]["brightness"] == 51
@@ -328,7 +337,7 @@ async def test_mixed_area_toggle_edit_and_remove(ha):
     )
     assert result["reason"] == "reconfigure_successful"
     await hass.async_block_till_done()
-    assert hass.states.is_state(MODE, STATE_ON)
+    assert hass.states.is_state(profile_switch(hass, entry), STATE_ON)
     await action(hass, "turn_on", {"entity_id": SHOWER}, {"brightness": 180})
     assert lights[SHOWER].calls[-1]["brightness"] == 31
     await action(hass, "turn_on", {"entity_id": SHOWER}, {"brightness": 200})
@@ -341,7 +350,7 @@ async def test_mixed_area_toggle_edit_and_remove(ha):
 
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.is_state(MODE, STATE_ON)
+    assert hass.states.is_state(profile_switch(hass, entry), STATE_ON)
     await action(hass, "turn_on", {"entity_id": HALL}, domain="homeassistant")
     assert lights[HALL].calls[-1]["brightness"] == 51
 
@@ -391,7 +400,9 @@ async def test_script_and_automation_sources_match_only_their_branch(ha):
     data = {"name": "Bathroom", "lights": [SHOWER, HALL], "brightness": 10}
     result = await add_group(hass, entry, {**data, "sources": ["entity:script.outer"]})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     hass.bus.async_fire("light_profile_script")
     await hass.async_block_till_done()
     assert lights[SHOWER].calls[-1]["brightness"] == 26
@@ -478,7 +489,9 @@ async def test_daylight_is_restored_without_turning_off_lights_on(ha):
     )
     await action(hass, "turn_off", {"entity_id": SHOWER})
 
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert current_jobs() != original
     assert lights[MIRROR].calls[-1] == {
         "brightness": 26,
@@ -491,7 +504,9 @@ async def test_daylight_is_restored_without_turning_off_lights_on(ha):
     assert lights[SHOWER].calls[-1]["brightness"] == 26
     await action(hass, "turn_off", {"entity_id": SHOWER})
 
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1] == {"brightness": 175, "rgb_color": (90, 20, 30)}
     assert hass.states.is_state(MIRROR, STATE_ON)
     assert hass.states.is_state(SHOWER, STATE_OFF)
@@ -501,7 +516,7 @@ async def test_daylight_is_restored_without_turning_off_lights_on(ha):
 
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.is_state(MODE, STATE_OFF)
+    assert hass.states.is_state(profile_switch(hass, entry), STATE_OFF)
     assert current_jobs() != original
     await action(hass, "turn_on", {"entity_id": SHOWER}, {"brightness": 99})
     assert lights[SHOWER].calls[-1] == {"brightness": 99, "rgb_color": (40, 80, 90)}
@@ -523,12 +538,16 @@ async def test_interception_stops_when_no_active_profile_or_restore_remains(ha):
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     assert service.job is original
 
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert service.job is not original
     await action(hass, "turn_on", {"entity_id": HALL})
     assert lights[HALL].calls[-1]["brightness"] == 26
     await action(hass, "turn_off", {"entity_id": HALL})
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert service.job is original
     assert hass.states.is_state(HALL, STATE_OFF)
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -564,7 +583,9 @@ async def test_russian_form_labels_and_independent_interface_option(ha):
     assert (await add_group(hass, entry, data))[
         "type"
     ] == data_entry_flow.FlowResultType.CREATE_ENTRY
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     user = await hass.auth.async_create_user("Dashboard user")
     await websocket_light(hass, user, HALL, origin="http://homeassistant.local:8123")
     assert lights[HALL].calls[-1]["brightness"] == 180
@@ -617,7 +638,9 @@ async def test_per_light_effects_and_daylight_restoration(ha):
         hass, "turn_on", {"entity_id": SHOWER}, {"effect": "Calm", "brightness": 150}
     )
     await action(hass, "turn_off", {"entity_id": SHOWER})
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1] == {
         "brightness": 26,
         "effect": "Rainbow",
@@ -637,7 +660,9 @@ async def test_per_light_effects_and_daylight_restoration(ha):
         "transition": 0.3,
     }
     await action(hass, "turn_off", {"entity_id": SHOWER})
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1]["effect"] == "off"
     await action(hass, "turn_on", {"entity_id": SHOWER})
     assert lights[SHOWER].calls[-1] == {"brightness": 150, "rgb_color": (30, 40, 50)}
@@ -645,7 +670,9 @@ async def test_per_light_effects_and_daylight_restoration(ha):
     await action(hass, "turn_off", {"entity_id": MIRROR})
     lights[MIRROR]._attr_effect_list = ["off"]
     lights[MIRROR].async_write_ha_state()
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     await action(hass, "turn_on", {"entity_id": MIRROR})
     assert lights[MIRROR].calls[-1] == {
         "brightness": 26,
@@ -723,27 +750,35 @@ async def test_profile_priority_handoff_and_baseline(ha):
 
     await action(hass, "turn_on", {"entity_id": [MIRROR, SHOWER]}, {"brightness": 185})
     await action(hass, "turn_off", {"entity_id": SHOWER})
-    await action(hass, "turn_on", {"entity_id": SECOND_PROFILE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, high)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1]["brightness"] == 26
     assert not lights[SHOWER].is_on
 
     count = len(lights[MIRROR].calls)
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, low)}, domain="switch"
+    )
     assert len(lights[MIRROR].calls) == count
-    assert hass.states.is_state(MODE, STATE_ON)
-    assert hass.states.is_state(SECOND_PROFILE, STATE_ON)
+    assert hass.states.is_state(profile_switch(hass, low), STATE_ON)
+    assert hass.states.is_state(profile_switch(hass, high), STATE_ON)
     await action(hass, "turn_on", {"entity_id": SHOWER})
     assert lights[SHOWER].calls[-1]["brightness"] == 26
     await action(hass, "turn_off", {"entity_id": SHOWER})
 
-    await action(hass, "turn_off", {"entity_id": SECOND_PROFILE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, high)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1]["brightness"] == 102
     assert not lights[SHOWER].is_on
     await action(hass, "turn_on", {"entity_id": SHOWER})
     assert lights[SHOWER].calls[-1]["brightness"] == 102
     await action(hass, "turn_off", {"entity_id": SHOWER})
 
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, low)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1]["brightness"] == 185
     assert not lights[SHOWER].is_on
     await action(hass, "turn_on", {"entity_id": SHOWER})
@@ -774,7 +809,7 @@ async def test_unique_priorities_and_reorder_active_profiles(ha):
     await action(
         hass,
         "turn_on",
-        {"entity_id": [MODE, SECOND_PROFILE]},
+        {"entity_id": [profile_switch(hass, low), profile_switch(hass, high)]},
         domain="switch",
     )
     await action(hass, "turn_on", {"entity_id": MIRROR})
@@ -795,14 +830,14 @@ async def test_unique_priorities_and_reorder_active_profiles(ha):
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     assert low.data["priority"] == 50
-    assert hass.states.get(MODE).name == "Late Evening"
+    assert hass.states.get(profile_switch(hass, low)).name == "Late Evening"
     assert lights[MIRROR].calls[-1]["brightness"] == 102
 
     assert await hass.config_entries.async_unload(low.entry_id)
     assert lights[MIRROR].calls[-1]["brightness"] == 26
     assert await hass.config_entries.async_setup(low.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.is_state(MODE, STATE_ON)
+    assert hass.states.is_state(profile_switch(hass, low), STATE_ON)
     assert lights[MIRROR].calls[-1]["brightness"] == 102
 
 
@@ -826,13 +861,15 @@ async def test_only_the_winning_profiles_source_filter_is_used(ha):
     await action(
         hass,
         "turn_on",
-        {"entity_id": [MODE, SECOND_PROFILE]},
+        {"entity_id": [profile_switch(hass, low), profile_switch(hass, high)]},
         domain="switch",
     )
     await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 180})
     assert lights[MIRROR].calls[-1]["brightness"] == 180
     await action(hass, "turn_off", {"entity_id": MIRROR})
-    await action(hass, "turn_off", {"entity_id": SECOND_PROFILE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, high)}, domain="switch"
+    )
     await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 180})
     assert lights[MIRROR].calls[-1]["brightness"] == 102
 
@@ -872,10 +909,14 @@ async def test_profile_handoff_replaces_previous_effect(ha):
         {"entity_id": MIRROR},
         {"brightness": 185, "rgb_color": [20, 30, 40]},
     )
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, low)}, domain="switch"
+    )
     assert light.calls[-1] == {"brightness": 102, "effect": "Rainbow", "transition": 0}
     await action(hass, "turn_off", {"entity_id": MIRROR})
-    await action(hass, "turn_on", {"entity_id": SECOND_PROFILE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, high)}, domain="switch"
+    )
     assert not light.is_on
     await action(hass, "turn_on", {"entity_id": MIRROR})
     assert light.calls[-1] == {
@@ -884,7 +925,9 @@ async def test_profile_handoff_replaces_previous_effect(ha):
         "rgb_color": (20, 30, 40),
         "transition": 0,
     }
-    await action(hass, "turn_off", {"entity_id": SECOND_PROFILE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, high)}, domain="switch"
+    )
     assert light.calls[-1] == {"brightness": 102, "effect": "Rainbow", "transition": 0}
 
 
@@ -979,12 +1022,16 @@ async def test_restore_fractional_mesh_brightness(
     light.async_write_ha_state()
     assert hass.states.get(MIRROR).attributes["brightness"] == original
 
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert light.calls[-1]["brightness"] == 26
     if not leave_light_on:
         await action(hass, "turn_off", {"entity_id": MIRROR})
 
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     if not leave_light_on:
         assert hass.states.is_state(MIRROR, STATE_OFF)
         await action(hass, "turn_on", {"entity_id": MIRROR})
@@ -1055,10 +1102,14 @@ async def test_restore_valid_brightness_when_reported_color_is_invalid(ha):
         STATE_ON,
         {"color_mode": "rgb", "rgb_color": [999, 0, 0], "brightness": "195"},
     )
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert light.calls[-1]["brightness"] == 26
 
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
 
     assert light.calls[-1] == {"brightness": 195}
 
@@ -1084,7 +1135,9 @@ async def test_zero_brightness_turns_off_only_its_group_and_restores_latest_requ
     assert next(iter(entry.subentries.values())).data["brightness"] == 0
     await add_group(hass, entry, {"name": "Dim", "lights": [SHOWER], "brightness": 10})
     await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 195})
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert hass.states.is_state(MIRROR, STATE_OFF)
     assert lights[MIRROR].off_calls == [{"transition": 1.5}]
     assert lights[HALL].off_calls == []
@@ -1100,7 +1153,9 @@ async def test_zero_brightness_turns_off_only_its_group_and_restores_latest_requ
     assert len(lights[MIRROR].calls) == 1
     assert lights[SHOWER].calls[-1]["brightness"] == 26
 
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert hass.states.is_state(MIRROR, STATE_ON)
     assert lights[MIRROR].calls[-1] == {"brightness": 191, "rgb_color": (0, 0, 255)}
     assert hass.states.is_state(HALL, STATE_OFF)
@@ -1116,7 +1171,9 @@ async def test_zero_brightness_restores_power_and_remembers_partial_requests(
     await add_group(hass, entry, {"name": "Off", "lights": [MIRROR], "brightness": 0})
     target = {"entity_id": MIRROR}
     await action(hass, "turn_on", target, {"brightness": 180, "rgb_color": [1, 2, 3]})
-    await action(hass, "turn_on", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_on", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     assert hass.states.is_state(MIRROR, STATE_OFF)
 
     if last_command is not None:
@@ -1130,7 +1187,9 @@ async def test_zero_brightness_restores_power_and_remembers_partial_requests(
             await action(hass, "turn_on", target, {"brightness_step": 25})
         assert hass.states.is_state(MIRROR, STATE_OFF)
 
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, entry)}, domain="switch"
+    )
     if last_command in ("turn_off", "brightness_zero"):
         assert hass.states.is_state(MIRROR, STATE_OFF)
         await action(hass, "turn_on", target)
@@ -1157,15 +1216,19 @@ async def test_turn_on_intent_survives_handoff_from_zero_brightness_profile(ha):
     await action(
         hass,
         "turn_on",
-        {"entity_id": [MODE, SECOND_PROFILE]},
+        {"entity_id": [profile_switch(hass, low), profile_switch(hass, high)]},
         domain="switch",
     )
     await action(hass, "turn_on", {"entity_id": MIRROR}, {"brightness": 150})
     assert hass.states.is_state(MIRROR, STATE_OFF)
-    await action(hass, "turn_off", {"entity_id": SECOND_PROFILE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, high)}, domain="switch"
+    )
     assert hass.states.is_state(MIRROR, STATE_ON)
     assert lights[MIRROR].calls[-1]["brightness"] == 102
-    await action(hass, "turn_off", {"entity_id": MODE}, domain="switch")
+    await action(
+        hass, "turn_off", {"entity_id": profile_switch(hass, low)}, domain="switch"
+    )
     assert lights[MIRROR].calls[-1]["brightness"] == 150
 
 
@@ -1186,7 +1249,7 @@ async def test_disabling_one_group_preserves_its_settings_and_other_groups(ha):
     await action(
         hass,
         "turn_on",
-        {"entity_id": [MODE, SECOND_PROFILE]},
+        {"entity_id": [profile_switch(hass, low), profile_switch(hass, high)]},
         domain="switch",
     )
     assert lights[MIRROR].calls[-1]["brightness"] == 26
@@ -1205,7 +1268,7 @@ async def test_disabling_one_group_preserves_its_settings_and_other_groups(ha):
         await hass.async_block_till_done()
         assert high.subentries[group.subentry_id].data["enabled"] is enabled
         assert high.subentries[group.subentry_id].data["brightness"] == 10
-        assert hass.states.is_state(SECOND_PROFILE, STATE_ON)
+        assert hass.states.is_state(profile_switch(hass, high), STATE_ON)
         assert lights[MIRROR].calls[-1]["brightness"] == expected
         assert lights[SHOWER].calls[-1]["brightness"] == 51
 
@@ -1237,16 +1300,13 @@ async def test_local_assist_controls_rooms_and_the_whole_profile(ha):
     registry = entity_registry.async_get(hass)
     overall = registry.async_get_entity_id("switch", DOMAIN, entry.entry_id)
     switches = {
-        item.area_id: item.entity_id
-        for item in registry.entities.values()
-        if item.config_entry_id == entry.entry_id and item.area_id
+        group.title: registry.async_get_entity_id(
+            "switch", DOMAIN, group_switch_id(entry.entry_id, group.subentry_id)
+        )
+        for group in entry.subentries.values()
     }
-    assert overall == MODE
-    assert switches == {
-        living.id: f"{MODE}_{living.id}",
-        office.id: f"{MODE}_{office.id}",
-    }
-    assert hass.states.get(switches[living.id]).name == "Ночной режим · Гостиная"
+    assert len(set(switches.values())) == 3
+    assert hass.states.get(switches["Mirror"]).name == "Ночной режим · Mirror"
     await action(
         hass, "turn_on", {"entity_id": [MIRROR, SHOWER, HALL]}, {"brightness": 200}
     )
@@ -1268,8 +1328,8 @@ async def test_local_assist_controls_rooms_and_the_whole_profile(ha):
     assert [
         lights[entity].calls[-1]["brightness"] for entity in (MIRROR, SHOWER, HALL)
     ] == [26, 51, 200]
-    assert hass.states.is_state(switches[living.id], STATE_ON)
-    assert hass.states.is_state(switches[office.id], STATE_OFF)
+    assert hass.states.is_state(switches["Mirror"], STATE_ON)
+    assert hass.states.is_state(switches["Hall"], STATE_OFF)
     assert hass.states.is_state(overall, STATE_OFF)
 
     await say("Включи ночной режим")
@@ -1278,12 +1338,12 @@ async def test_local_assist_controls_rooms_and_the_whole_profile(ha):
 
     await say("Выключи ночной режим в кабинете")
     assert lights[HALL].calls[-1]["brightness"] == 200
-    assert hass.states.is_state(switches[living.id], STATE_ON)
-    assert hass.states.is_state(switches[office.id], STATE_OFF)
+    assert hass.states.is_state(switches["Mirror"], STATE_ON)
+    assert hass.states.is_state(switches["Hall"], STATE_OFF)
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.is_state(switches[living.id], STATE_ON)
-    assert hass.states.is_state(switches[office.id], STATE_OFF)
+    assert hass.states.is_state(switches["Mirror"], STATE_ON)
+    assert hass.states.is_state(switches["Hall"], STATE_OFF)
 
     await say("Выключи ночной режим")
     assert all(hass.states.is_state(entity, STATE_OFF) for entity in switches.values())
@@ -1291,38 +1351,91 @@ async def test_local_assist_controls_rooms_and_the_whole_profile(ha):
 
 
 @pytest.mark.asyncio
-async def test_switch_ids_survive_profile_rename_and_upgrade(ha):
+async def test_switch_codes_and_ids_survive_renaming_and_moving_a_group(ha):
     hass, _ = ha
     registry = entity_registry.async_get(hass)
+    areas = area_registry.async_get(hass)
+    living = areas.async_create("Гостиная")
+    bedroom = areas.async_create("Спальня")
     entry = await install(hass, title="Ночной режим")
-    number = entry.data["profile_number"]
-    area = area_registry.async_get(hass).async_create("Living room")
-    await add_group(
-        hass, entry, {"name": "Mirror", "lights": [MIRROR], "area": area.id}
+    data = {"name": "Mirror", "lights": [MIRROR], "area": living.id}
+    await add_group(hass, entry, data)
+    group = next(iter(entry.subentries.values()))
+    overall = profile_switch(hass, entry)
+    group_id = registry.async_get_entity_id(
+        "switch", DOMAIN, group_switch_id(entry.entry_id, group.subentry_id)
     )
-    room_id = registry.async_get_entity_id(
-        "switch", DOMAIN, f"{entry.entry_id}:{area.id}"
-    )
+    profile_code = switch_code(entry.entry_id)
+    group_code = switch_code(group.subentry_id)
+    assert profile_code.isupper() and len(profile_code) == 8
+    assert overall == f"switch.light_profile_{profile_code.lower()}"
+    assert group_id == f"{overall}_group_{group_code.lower()}"
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
+    fields = options["data_schema"].schema
+    identifier = next(field for field in fields if field == "identifier")
+    assert identifier.description["suggested_value"] == f"{profile_code} · {overall}"
+    assert fields[identifier].serialize()["selector"]["text"]["read_only"]
     await hass.config_entries.options.async_configure(
         options["flow_id"], {"name": "Тихий режим", "priority": 50}
     )
     await hass.async_block_till_done()
-    assert entry.data["profile_number"] == number
-    assert hass.states.get(MODE).name == "Тихий режим"
-    assert hass.states.get(room_id).name == "Тихий режим · Living room"
+    await action(hass, "turn_on", {"entity_id": group_id}, domain="switch")
 
-    # Recreate the configuration and registry state of an older installation.
+    form = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, GROUP),
+        context={"source": "reconfigure", "subentry_id": group.subentry_id},
+    )
+    fields = form["data_schema"].schema
+    identifier = next(field for field in fields if field == "identifier")
+    assert identifier.description["suggested_value"] == f"{group_code} · {group_id}"
+    assert fields[identifier].serialize()["selector"]["text"]["read_only"]
+    await hass.config_entries.subentries.async_configure(
+        form["flow_id"], data | {"name": "Bedside", "area": bedroom.id}
+    )
+    await hass.async_block_till_done()
+    assert profile_switch(hass, entry) == overall
+    assert registry.async_get(group_id).area_id == bedroom.id
+    assert hass.states.get(group_id).name == "Тихий режим · Bedside"
+    assert hass.states.is_state(group_id, STATE_ON)
+    reply = await async_converse(
+        hass, "Выключи тихий режим в спальне", None, Context(), language="ru"
+    )
+    assert reply.response.response_type.value == "action_done"
+    await hass.async_block_till_done()
+    assert hass.states.is_state(group_id, STATE_OFF)
+
+
+@pytest.mark.asyncio
+async def test_existing_room_activation_moves_to_its_groups(ha):
+    hass, _ = ha
+    room = area_registry.async_get(hass).async_create("Living room")
+    entry = await install(hass)
+    for title, light in (("Mirror", MIRROR), ("Shower", SHOWER)):
+        await add_group(
+            hass, entry, {"name": title, "lights": [light], "area": room.id}
+        )
+
+    controller = entry.runtime_data
     assert await hass.config_entries.async_unload(entry.entry_id)
-    old_ids = {
-        MODE: "switch.nochnoi_rezhim",
-        room_id: "switch.nochnoi_rezhim_living_room",
-    }
-    for current, old in old_ids.items():
-        registry.async_update_entity(current, new_entity_id=old)
-    hass.config_entries.async_update_entry(entry, data={"priority": 50})
+    registry = entity_registry.async_get(hass)
+    old_main = profile_switch(hass, entry)
+    registry.async_update_entity(old_main, new_entity_id="switch.light_profile_1")
+    old_room = registry.async_get_or_create(
+        "switch",
+        DOMAIN,
+        f"{entry.entry_id}:{room.id}",
+        config_entry=entry,
+        suggested_object_id="light_profile_1_living_room",
+    )
+    controller._legacy_area_overrides[entry.entry_id] = {room.id: True}
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.data["profile_number"] == number
-    assert all(hass.states.is_state(old, STATE_OFF) for old in old_ids.values())
+
+    assert profile_switch(hass, entry) == "switch.light_profile_1"
+    assert registry.async_get(old_room.entity_id) is None
+    for group in entry.subentries.values():
+        unique_id = group_switch_id(entry.entry_id, group.subentry_id)
+        assert hass.states.is_state(
+            registry.async_get_entity_id("switch", DOMAIN, unique_id), STATE_ON
+        )

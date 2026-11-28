@@ -36,12 +36,15 @@ from .const import (
     GROUP,
     GROUP_AREA,
     GROUP_ENABLED,
+    IDENTIFIER,
     INCLUDE_UI,
     LIGHTS,
     PRIORITY,
     SOURCES,
     TEMPERATURE,
     TRANSITION_MS,
+    group_switch_id,
+    switch_code,
 )
 from .daylight import available_effects
 
@@ -65,6 +68,19 @@ PROFILE_SCHEMA = vol.Schema(
         vol.Optional(PRIORITY): selector.NumberSelector({"mode": "box", "step": 1}),
     }
 )
+
+
+def _identifier_field(
+    hass: HomeAssistant, registry_id: str, code_id: str
+) -> dict[vol.Optional, selector.TextSelector]:
+    code = switch_code(code_id)
+    entity_id = er.async_get(hass).async_get_entity_id("switch", DOMAIN, registry_id)
+    label = f"{code} · {entity_id}" if entity_id else code
+    return {
+        vol.Optional(
+            IDENTIFIER, description={"suggested_value": label}
+        ): selector.TextSelector({"read_only": True})
+    }
 
 
 class LightProfileConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -115,7 +131,9 @@ class LightProfileOptionsFlow(OptionsFlow):
         defaults = {CONF_NAME: entry.title, PRIORITY: entry.data[PRIORITY]}
         errors = {}
         if user_input is not None:
-            defaults = user_input
+            defaults = {
+                key: value for key, value in user_input.items() if key != IDENTIFIER
+            }
             priorities = {
                 other.data[PRIORITY]
                 for other in self.hass.config_entries.async_entries(
@@ -134,7 +152,16 @@ class LightProfileOptionsFlow(OptionsFlow):
                 return self.async_create_entry(title="", data=entry.options)
         return self.async_show_form(
             step_id="init",
-            data_schema=self.add_suggested_values_to_schema(PROFILE_SCHEMA, defaults),
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Optional(CONF_NAME): PROFILE_SCHEMA.schema[CONF_NAME],
+                        **_identifier_field(self.hass, entry.entry_id, entry.entry_id),
+                        vol.Optional(PRIORITY): PROFILE_SCHEMA.schema[PRIORITY],
+                    }
+                ),
+                defaults,
+            ),
             errors=errors,
         )
 
@@ -270,8 +297,11 @@ class LightGroupFlow(ConfigSubentryFlow):
             defaults.setdefault(GROUP_ENABLED, True)
 
         if user_input is not None:
-            defaults = user_input
+            defaults = {
+                key: value for key, value in user_input.items() if key != IDENTIFIER
+            }
             data = dict(user_input)
+            data.pop(IDENTIFIER, None)
             title = data.pop(CONF_NAME, "").strip()
             registry = er.async_get(self.hass)
             data[LIGHTS] = list(
@@ -323,6 +353,15 @@ class LightGroupFlow(ConfigSubentryFlow):
 
         fields = {
             vol.Optional(CONF_NAME): selector.TextSelector(),
+            **(
+                _identifier_field(
+                    self.hass,
+                    group_switch_id(self._get_entry().entry_id, subentry.subentry_id),
+                    subentry.subentry_id,
+                )
+                if subentry
+                else {}
+            ),
             vol.Optional(GROUP_ENABLED, default=True): selector.BooleanSelector(),
             vol.Optional(GROUP_AREA): selector.AreaSelector(),
             vol.Optional(LIGHTS): selector.EntitySelector(

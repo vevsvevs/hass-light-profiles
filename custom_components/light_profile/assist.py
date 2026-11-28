@@ -1,4 +1,4 @@
-"""Register local Assist sentences for profile and room switches."""
+"""Register local Assist sentences for profile and group switches."""
 
 import re
 
@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, area_switch_id
+from .const import DOMAIN, group_switch_id
 
 
 def _key(text: str) -> str:
@@ -35,13 +35,13 @@ class VoiceCommands:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._profiles: dict[str, tuple[str, frozenset[str]]] = {}
+        self._profiles: dict[str, tuple[str, dict[str, set[str]]]] = {}
         self._unregister = None
-        self._targets: dict[str, set[tuple[str, str]]] = {}
+        self._targets: dict[str, set[tuple[str, str | None, str]]] = {}
 
     @callback
-    def update(self, entry_id: str, name: str, areas: set[str]) -> None:
-        self._profiles[entry_id] = (name, frozenset(areas))
+    def update(self, entry_id: str, name: str, areas: dict[str, set[str]]) -> None:
+        self._profiles[entry_id] = (name, areas)
         self._refresh()
 
     @callback
@@ -51,7 +51,7 @@ class VoiceCommands:
 
     @callback
     def _refresh(self) -> None:
-        targets: dict[str, set[tuple[str, str]]] = {}
+        targets: dict[str, set[tuple[str, str | None, str]]] = {}
         registry = ar.async_get(self.hass)
         for entry_id, (title, areas) in self._profiles.items():
             name = _key(title)
@@ -63,11 +63,11 @@ class VoiceCommands:
             ):
                 action = SERVICE_TURN_ON if enabled else SERVICE_TURN_OFF
                 for sentence in (f"{ru} {name}", f"{en} {name}"):
-                    targets.setdefault(sentence, set()).add((entry_id, action))
+                    targets.setdefault(sentence, set()).add((entry_id, None, action))
                 for area_id in areas:
                     if not (area := registry.async_get_area(area_id)):
                         continue
-                    target = (area_switch_id(entry_id, area_id), action)
+                    target = (entry_id, area_id, action)
                     for label in (area.name, *area.aliases):
                         label = _key(label)
                         if not label:
@@ -105,10 +105,23 @@ class VoiceCommands:
                 else "Specify the profile or room name"
             )
 
-        ((unique_id, action),) = targets
+        ((entry_id, area_id, action),) = targets
+        unique_ids = (
+            [entry_id]
+            if area_id is None
+            else [
+                group_switch_id(entry_id, group_id)
+                for group_id in self._profiles[entry_id][1][area_id]
+            ]
+        )
         registry = er.async_get(self.hass)
-        entity_id = registry.async_get_entity_id("switch", DOMAIN, unique_id)
-        if entity_id is None or not self.hass.states.get(entity_id):
+        entity_ids = [
+            entity_id
+            for unique_id in unique_ids
+            if (entity_id := registry.async_get_entity_id("switch", DOMAIN, unique_id))
+            and self.hass.states.get(entity_id)
+        ]
+        if not entity_ids:
             return (
                 "Режим недоступен" if russian else "The lighting profile is unavailable"
             )
@@ -116,7 +129,7 @@ class VoiceCommands:
         await self.hass.services.async_call(
             "switch",
             action,
-            {"entity_id": entity_id},
+            {"entity_id": entity_ids},
             blocking=True,
             context=user_input.context,
         )

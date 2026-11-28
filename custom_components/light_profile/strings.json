@@ -55,6 +55,7 @@
           "title": "Lighting group setup",
           "data": {
             "name": "Group name",
+            "identifier": "Identifier",
             "area": "Area",
             "enabled": "Group enabled",
             "lights": "Lights",
@@ -100,6 +101,7 @@
         "title": "Edit a lighting profile",
         "data": {
           "name": "Profile name",
+          "identifier": "Identifier",
           "priority": "Priority"
         },
         "data_description": {

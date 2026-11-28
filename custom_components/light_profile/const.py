@@ -1,5 +1,8 @@
 """Constants for Light Profiles."""
 
+from base64 import b32encode
+from hashlib import blake2s
+
 DOMAIN = "light_profile"
 GROUP = "light_group"
 GROUP_ENABLED = "enabled"
@@ -19,9 +22,14 @@ TRANSITION_MS = "transition_ms"
 EFFECTS = "effects"
 CONFIGURE_EFFECTS = "configure_effects"
 PRIORITY = "priority"
-PROFILE_NUMBER = "profile_number"
+IDENTIFIER = "identifier"
 
 
-def area_switch_id(entry_id: str, area_id: str) -> str:
-    """Return the stable registry key for a room switch."""
-    return f"{entry_id}:{area_id}"
+def switch_code(unique_id: str) -> str:
+    """Derive a short code from Home Assistant's immutable, random ID."""
+    return b32encode(blake2s(unique_id.encode(), digest_size=5).digest()).decode()
+
+
+def group_switch_id(entry_id: str, group_id: str) -> str:
+    """Return the registry key of a group's switch."""
+    return f"{entry_id}:group:{group_id}"
