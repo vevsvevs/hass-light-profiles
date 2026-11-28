@@ -8,9 +8,18 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import slugify
 
 from . import LightProfileEntry
-from .const import DATA_ASSIST, GROUP, GROUP_AREA, PROFILE_STATE_UPDATED, area_switch_id
+from .const import (
+    DATA_ASSIST,
+    DOMAIN,
+    GROUP,
+    GROUP_AREA,
+    PROFILE_NUMBER,
+    PROFILE_STATE_UPDATED,
+    area_switch_id,
+)
 
 
 async def async_setup_entry(
@@ -89,6 +98,11 @@ class ProfileSwitch(SwitchEntity):
         )
         self._attr_name = self._name(area_name)
         self._controller = entry.runtime_data
+
+    @property
+    def suggested_object_id(self) -> str:
+        base = f"{DOMAIN}_{self._entry.data[PROFILE_NUMBER]}"
+        return f"{base}_{slugify(self._area_id)}" if self._area_id else base
 
     def _name(self, area_name: str | None) -> str:
         return f"{self._entry.title} · {area_name}" if area_name else self._entry.title

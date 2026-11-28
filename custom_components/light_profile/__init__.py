@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DATA_ASSIST, PRIORITY
+from .const import DATA_ASSIST, DOMAIN, PRIORITY, PROFILE_NUMBER
 from .controller import LightProfiles
 
 PLATFORMS = (Platform.SWITCH,)
@@ -28,6 +28,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: LightProfileEntry) -> bool:
     """Load one profile and its independent switch."""
+    if PROFILE_NUMBER not in entry.data:
+        highest_number = max(
+            (
+                profile.data.get(PROFILE_NUMBER, 0)
+                for profile in hass.config_entries.async_entries(DOMAIN)
+            ),
+            default=0,
+        )
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, PROFILE_NUMBER: highest_number + 1}
+        )
+
     controller = entry.runtime_data = hass.data[DATA_CONTROLLER]
     try:
         await _async_update_profile(hass, entry)

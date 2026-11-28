@@ -19,6 +19,7 @@ TRANSITION_MS = "transition_ms"
 EFFECTS = "effects"
 CONFIGURE_EFFECTS = "configure_effects"
 PRIORITY = "priority"
+PROFILE_NUMBER = "profile_number"
 
 
 def area_switch_id(entry_id: str, area_id: str) -> str:
