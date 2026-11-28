@@ -2,7 +2,6 @@
 
 import asyncio
 import re
-from itertools import chain
 from secrets import choice
 from string import ascii_lowercase, digits
 from typing import Any
@@ -22,7 +21,6 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.helpers.http import current_request
@@ -55,6 +53,9 @@ from .const import (
     switch_object_id,
 )
 from .daylight import available_effects
+
+SOURCE_DEVICES = "source_devices"
+SOURCE_ENTITIES = "source_entities"
 
 PRESET_FIELDS = {
     vol.Optional(BRIGHTNESS, default=10): selector.NumberSelector(
@@ -341,6 +342,17 @@ class LightGroupFlow(ConfigSubentryFlow):
             defaults.setdefault(CONFIGURE_EFFECTS, bool(saved))
             defaults.setdefault(GROUP_ENABLED, True)
             defaults[LIGHTS] = {"entity_id": subentry.data[LIGHTS]}
+            sources = subentry.data.get(SOURCES, ())
+            defaults[SOURCE_DEVICES] = [
+                source.removeprefix(DEVICE_PREFIX)
+                for source in sources
+                if source.startswith(DEVICE_PREFIX)
+            ]
+            defaults[SOURCE_ENTITIES] = [
+                source.removeprefix(ENTITY_PREFIX)
+                for source in sources
+                if source.startswith(ENTITY_PREFIX)
+            ]
 
         if user_input is not None:
             defaults = user_input
@@ -350,7 +362,19 @@ class LightGroupFlow(ConfigSubentryFlow):
                 data[LIGHTS] = _selected_lights(self.hass, data.get(LIGHTS, {}))
             except vol.Invalid:
                 data[LIGHTS] = []
-            data[SOURCES] = list(dict.fromkeys(data.get(SOURCES, ())))
+            if effects is None:
+                registry = er.async_get(self.hass)
+                devices = data.pop(SOURCE_DEVICES, ())
+                entities = data.pop(SOURCE_ENTITIES, ())
+                data[SOURCES] = list(
+                    dict.fromkeys(
+                        [f"{DEVICE_PREFIX}{device}" for device in devices]
+                        + [
+                            f"{ENTITY_PREFIX}{er.async_resolve_entity_id(registry, entity) or entity}"
+                            for entity in entities
+                        ]
+                    )
+                )
 
             if not title:
                 errors[CONF_NAME] = "empty_name"
@@ -415,15 +439,11 @@ class LightGroupFlow(ConfigSubentryFlow):
             {
                 **fields,
                 **PRESET_FIELDS,
-                vol.Optional(SOURCES): selector.SelectSelector(
-                    {
-                        "options": _source_options(
-                            self.hass, defaults.get(SOURCES, [])
-                        ),
-                        "multiple": True,
-                        "mode": selector.SelectSelectorMode.DROPDOWN,
-                        "sort": True,
-                    }
+                vol.Optional(SOURCE_DEVICES): selector.DeviceSelector(
+                    {"multiple": True}
+                ),
+                vol.Optional(SOURCE_ENTITIES): selector.EntitySelector(
+                    {"multiple": True}
                 ),
                 vol.Optional(INCLUDE_UI, default=False): selector.BooleanSelector(),
             }
@@ -515,26 +535,3 @@ async def _effect_options(
             labels[effect] = label
         options[entity_id] = (name, labels)
     return options
-
-
-@callback
-def _source_options(
-    hass: HomeAssistant, selected: list[str]
-) -> list[selector.SelectOptionDict]:
-    """Combine devices and entities in one searchable picker."""
-    labels = {source: source.partition(":")[2] for source in selected}
-    registry = er.async_get(hass)
-    for entry in registry.entities.values():
-        label = entry.name or entry.original_name
-        labels[f"{ENTITY_PREFIX}{entry.entity_id}"] = (
-            f"{label} ({entry.entity_id})" if label else entry.entity_id
-        )
-    for state in hass.states.async_all():
-        labels[f"{ENTITY_PREFIX}{state.entity_id}"] = (
-            f"{state.name} ({state.entity_id})"
-        )
-    devices = dr.async_get(hass)
-    for device in chain(devices.devices, devices.child_devices):
-        label = device.name_by_user or device.name or device.id
-        labels[f"{DEVICE_PREFIX}{device.id}"] = label
-    return [{"value": source, "label": label} for source, label in labels.items()]

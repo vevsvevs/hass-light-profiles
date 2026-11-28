@@ -216,6 +216,21 @@ def profile_switch(hass, entry):
 async def configure_group(hass, flow_id, data):
     if isinstance(data.get("lights"), list):
         data = {**data, "lights": {"entity_id": data["lights"]}}
+    if "sources" in data:
+        sources = data["sources"]
+        data = {
+            **{key: value for key, value in data.items() if key != "sources"},
+            "source_devices": [
+                source.removeprefix("device:")
+                for source in sources
+                if source.startswith("device:")
+            ],
+            "source_entities": [
+                source.removeprefix("entity:")
+                for source in sources
+                if source.startswith("entity:")
+            ],
+        }
     return await hass.config_entries.subentries.async_configure(flow_id, data)
 
 
@@ -583,7 +598,8 @@ async def test_russian_form_labels_and_independent_interface_option(ha):
         next(field for field in schema if field == "brightness"), vol.Optional
     )
     prefix = "component.light_profile.config_subentries.light_group.step.user"
-    assert labels[f"{prefix}.data.sources"] == "Фильтр по источнику включения"
+    assert labels[f"{prefix}.data.source_devices"] == "Устройства-источники"
+    assert labels[f"{prefix}.data.source_entities"] == "Объекты-источники"
     assert "интерфейса" in labels[f"{prefix}.data.include_ui"]
     assert labels[f"{prefix}.title"] == "Настройка группы освещения"
     assert f"{prefix}.description" not in labels
@@ -1526,3 +1542,48 @@ async def test_profile_reload_refreshes_cached_name_help(ha, monkeypatch):
     assert await hass.config_entries.async_reload(entry.entry_id)
     updated = await async_get_translations(hass, "ru", category, [DOMAIN])
     assert updated[key] == "Объект {identifier}"
+
+
+@pytest.mark.asyncio
+async def test_group_source_pickers_restore_saved_sources_and_can_be_cleared(ha):
+    hass, _ = ha
+    entry = await install(hass)
+    device = device_registry.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "source-device")}
+    )
+    lights = {"entity_id": [MIRROR]}
+    result = await add_group(
+        hass,
+        entry,
+        {
+            "name": "Room",
+            "lights": lights,
+            "source_devices": [device.id],
+            "source_entities": ["automation.bathroom_button", "script.outer"],
+        },
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    group = next(iter(entry.subentries.values()))
+    assert group.data["sources"] == [
+        f"device:{device.id}",
+        "entity:automation.bathroom_button",
+        "entity:script.outer",
+    ]
+
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, GROUP),
+        context={"source": "reconfigure", "subentry_id": group.subentry_id},
+    )
+    fields = flow["data_schema"].schema
+    for field_name, kind, expected in (
+        ("source_devices", "device", [device.id]),
+        ("source_entities", "entity", ["automation.bathroom_button", "script.outer"]),
+    ):
+        field = next(field for field in fields if field == field_name)
+        assert fields[field].serialize()["selector"][kind]["multiple"]
+        assert field.description["suggested_value"] == expected
+    result = await configure_group(
+        hass, flow["flow_id"], {"name": "Room", "lights": lights}
+    )
+    assert result["reason"] == "reconfigure_successful"
+    assert not entry.subentries[group.subentry_id].data["sources"]
