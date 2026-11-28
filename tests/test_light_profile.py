@@ -594,11 +594,11 @@ async def test_russian_form_labels_and_independent_interface_option(ha):
         labels[
             "component.light_profile.config_subentries.light_group.step.reconfigure.data_description.name"
         ]
-        == "Идентификатор {identifier}"
+        == "Идентификатор: {identifier}"
     )
     for category, step, expected in (
         ("config", "user", "Введите имя профиля"),
-        ("options", "init", "Идентификатор {identifier}"),
+        ("options", "init", "Идентификатор: {identifier}"),
     ):
         translations = await async_get_translations(hass, "ru", category, [DOMAIN])
         assert (
@@ -1505,7 +1505,7 @@ async def test_profile_reload_refreshes_cached_name_help(ha, monkeypatch):
     category = "options"
     key = f"component.{DOMAIN}.options.step.init.data_description.name"
     translations = await async_get_translations(hass, "ru", category, [DOMAIN])
-    assert translations[key] == "Идентификатор {identifier}"
+    assert translations[key] == "Идентификатор: {identifier}"
 
     load_files = translation._load_translations_files_by_language
 
