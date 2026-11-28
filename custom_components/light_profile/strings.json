@@ -37,8 +37,7 @@
             "brightness": "Brightness",
             "temperature": "Color temperature (K)",
             "color": "RGB color",
-            "source_devices": "Source devices",
-            "source_entities": "Source entities",
+            "sources": "Turn-on source filter",
             "include_ui": "Apply settings when turned on from the interface",
             "transition_ms": "Transition duration (ms)",
             "configure_effects": "Configure light effects"
@@ -48,8 +47,7 @@
             "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
-            "source_devices": "Leave both source fields empty to apply settings regardless of the turn-on source",
-            "source_entities": "You can also select automations and scripts here",
+            "sources": "Choose devices or entities, including automations and scripts. Areas, floors, and labels add their sources when saved. Leave empty to apply settings regardless of the source",
             "include_ui": "Enable to apply the profile preset to commands from the Home Assistant dashboard",
             "transition_ms": "Leave blank or enter 0 for an instant transition",
             "configure_effects": "Enable to configure an effect for the selected lights, if available. When disabled, previously selected effects are not applied"
@@ -65,8 +63,7 @@
             "brightness": "Brightness",
             "temperature": "Color temperature (K)",
             "color": "RGB color",
-            "source_devices": "Source devices",
-            "source_entities": "Source entities",
+            "sources": "Turn-on source filter",
             "include_ui": "Apply settings when turned on from the interface",
             "transition_ms": "Transition duration (ms)",
             "configure_effects": "Configure light effects"
@@ -76,8 +73,7 @@
             "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
-            "source_devices": "Leave both source fields empty to apply settings regardless of the turn-on source",
-            "source_entities": "You can also select automations and scripts here",
+            "sources": "Choose devices or entities, including automations and scripts. Areas, floors, and labels add their sources when saved. Leave empty to apply settings regardless of the source",
             "include_ui": "Enable to apply the profile preset to commands from the Home Assistant dashboard",
             "transition_ms": "Leave blank or enter 0 for an instant transition",
             "configure_effects": "Enable to configure an effect for the selected lights, if available. When disabled, previously selected effects are not applied"
@@ -93,7 +89,8 @@
         "select_lights": "Select at least one light.",
         "duplicate_name": "A group with this name already exists.",
         "light_already_grouped": "One or more selected lights already belong to another Light Profiles group.",
-        "invalid_temperature": "Enter 0 or a value from 1000 to 10000 kelvin."
+        "invalid_temperature": "Enter 0 or a value from 1000 to 10000 kelvin.",
+        "select_sources": "Select at least one source or clear the source filter."
       },
       "initiate_flow": {
         "user": "Add a light group",

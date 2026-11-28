@@ -54,9 +54,6 @@ from .const import (
 )
 from .daylight import available_effects
 
-SOURCE_DEVICES = "source_devices"
-SOURCE_ENTITIES = "source_entities"
-
 PRESET_FIELDS = {
     vol.Optional(BRIGHTNESS, default=10): selector.NumberSelector(
         {"min": 0, "max": 100, "unit_of_measurement": "%"}
@@ -105,7 +102,7 @@ def _switch_identifier(hass: HomeAssistant, registry_id: str, object_id: str) ->
     )
 
 
-def _selected_lights(hass: HomeAssistant, target: dict[str, Any]) -> list[str]:
+def _target_selection(hass: HomeAssistant, target: dict[str, Any]) -> TargetSelection:
     selection = TargetSelection(vol.Schema(cv.TARGET_SERVICE_FIELDS)(target))
     registry = er.async_get(hass)
     for item in (selection, selection.exclude):
@@ -114,14 +111,53 @@ def _selected_lights(hass: HomeAssistant, target: dict[str, Any]) -> list[str]:
                 er.async_resolve_entity_id(registry, entity_id) or entity_id
                 for entity_id in item.entity_ids
             }
+    return selection
+
+
+def _selected_lights(hass: HomeAssistant, target: dict[str, Any]) -> list[str]:
     selected = async_extract_referenced_entity_ids(
-        hass, selection, expand_group=False, primary_entities_only=False
+        hass,
+        _target_selection(hass, target),
+        expand_group=False,
+        primary_entities_only=False,
     )
     return sorted(
         entity_id
         for entity_id in selected.referenced | selected.indirectly_referenced
         if entity_id.startswith("light.")
     )
+
+
+def _source_target(sources: list[str]) -> dict[str, list[str]]:
+    return {
+        key: [
+            source.removeprefix(prefix)
+            for source in sources
+            if source.startswith(prefix)
+        ]
+        for key, prefix in (("device_id", DEVICE_PREFIX), ("entity_id", ENTITY_PREFIX))
+    }
+
+
+def _selected_sources(hass: HomeAssistant, target: dict[str, Any]) -> list[str]:
+    selection = _target_selection(hass, target)
+    devices, entities = selection.device_ids, selection.entity_ids
+    if (
+        selection.area_ids
+        or selection.floor_ids
+        or selection.label_ids
+        or selection.exclude
+    ):
+        selected = async_extract_referenced_entity_ids(
+            hass, selection, expand_group=False, primary_entities_only=False
+        )
+        devices = selected.referenced_devices
+        entities = selected.referenced | selected.indirectly_referenced
+    sources = [f"{DEVICE_PREFIX}{device}" for device in sorted(devices)]
+    sources.extend(f"{ENTITY_PREFIX}{entity}" for entity in sorted(entities))
+    if not sources and selection.has_any_target:
+        raise vol.Invalid("No sources selected")
+    return sources
 
 
 class LightProfileConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -342,17 +378,7 @@ class LightGroupFlow(ConfigSubentryFlow):
             defaults.setdefault(CONFIGURE_EFFECTS, bool(saved))
             defaults.setdefault(GROUP_ENABLED, True)
             defaults[LIGHTS] = {"entity_id": subentry.data[LIGHTS]}
-            sources = subentry.data.get(SOURCES, ())
-            defaults[SOURCE_DEVICES] = [
-                source.removeprefix(DEVICE_PREFIX)
-                for source in sources
-                if source.startswith(DEVICE_PREFIX)
-            ]
-            defaults[SOURCE_ENTITIES] = [
-                source.removeprefix(ENTITY_PREFIX)
-                for source in sources
-                if source.startswith(ENTITY_PREFIX)
-            ]
+            defaults[SOURCES] = _source_target(subentry.data.get(SOURCES, []))
 
         if user_input is not None:
             defaults = user_input
@@ -362,19 +388,10 @@ class LightGroupFlow(ConfigSubentryFlow):
                 data[LIGHTS] = _selected_lights(self.hass, data.get(LIGHTS, {}))
             except vol.Invalid:
                 data[LIGHTS] = []
-            if effects is None:
-                registry = er.async_get(self.hass)
-                devices = data.pop(SOURCE_DEVICES, ())
-                entities = data.pop(SOURCE_ENTITIES, ())
-                data[SOURCES] = list(
-                    dict.fromkeys(
-                        [f"{DEVICE_PREFIX}{device}" for device in devices]
-                        + [
-                            f"{ENTITY_PREFIX}{er.async_resolve_entity_id(registry, entity) or entity}"
-                            for entity in entities
-                        ]
-                    )
-                )
+            try:
+                data[SOURCES] = _selected_sources(self.hass, data.get(SOURCES, {}))
+            except vol.Invalid:
+                errors[SOURCES] = "select_sources"
 
             if not title:
                 errors[CONF_NAME] = "empty_name"
@@ -402,6 +419,7 @@ class LightGroupFlow(ConfigSubentryFlow):
                                 **data,
                                 CONF_NAME: title,
                                 LIGHTS: {"entity_id": data[LIGHTS]},
+                                SOURCES: _source_target(data[SOURCES]),
                             }
                             self._effect_choices = available
                             return await self._effects_form(available, subentry)
@@ -439,11 +457,8 @@ class LightGroupFlow(ConfigSubentryFlow):
             {
                 **fields,
                 **PRESET_FIELDS,
-                vol.Optional(SOURCE_DEVICES): selector.DeviceSelector(
-                    {"multiple": True}
-                ),
-                vol.Optional(SOURCE_ENTITIES): selector.EntitySelector(
-                    {"multiple": True}
+                vol.Optional(SOURCES): selector.TargetSelector(
+                    {"primary_entities_only": False}
                 ),
                 vol.Optional(INCLUDE_UI, default=False): selector.BooleanSelector(),
             }
