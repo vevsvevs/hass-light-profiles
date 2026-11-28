@@ -12,7 +12,7 @@ Light Profiles is a custom Home Assistant integration that applies lighting pres
 - Filters turn-on commands by device, entity, automation, or script. Commands from the Home Assistant interface are controlled separately.
 - Uses the highest-priority active profile for each light. Already-on lights follow the new profile when it takes over. After the last applicable profile is switched off, each affected light follows the latest requested on/off state and settings. If no command arrived while a profile was active, the light returns to its previous state.
 
-New switches use stable IDs such as `switch.light_profile_k4f7` and `switch.light_profile_k4f7_group_n5q7`. The **Identifier** row in profile and group settings shows the short code and the current entity ID. Recreate profiles and groups made with earlier versions to use this ID format.
+New switches use stable IDs such as `switch.light_profile_k4f7` and `switch.light_profile_k4f7_group_n5q7`. When editing a profile or group, its entity ID appears below the name. Select lights by area, device, entity, or label. Saving records the lights in the selection at that moment. Recreate profiles and groups made with earlier versions to use this ID format.
 
 ## Local Assist
 

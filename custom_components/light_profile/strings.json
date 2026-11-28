@@ -9,6 +9,7 @@
           "priority": "Priority"
         },
         "data_description": {
+          "name": "Enter a profile name",
           "priority": "Higher numbers take precedence"
         }
       }
@@ -42,6 +43,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
+            "name": "Enter a group name",
             "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
@@ -55,7 +57,6 @@
           "title": "Lighting group setup",
           "data": {
             "name": "Group name",
-            "identifier": "Identifier",
             "area": "Area",
             "enabled": "Group enabled",
             "lights": "Lights",
@@ -68,6 +69,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
+            "name": "Entity ID `{identifier}`",
             "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
@@ -101,10 +103,10 @@
         "title": "Edit a lighting profile",
         "data": {
           "name": "Profile name",
-          "identifier": "Identifier",
           "priority": "Priority"
         },
         "data_description": {
+          "name": "Entity ID `{identifier}`",
           "priority": "Higher numbers take precedence"
         }
       }

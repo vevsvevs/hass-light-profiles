@@ -20,7 +20,12 @@ from homeassistant.components.websocket_api.commands import handle_call_service
 from homeassistant.components.websocket_api.connection import current_connection
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import Context, HomeAssistant, State
-from homeassistant.helpers import area_registry, device_registry, entity_registry
+from homeassistant.helpers import (
+    area_registry,
+    device_registry,
+    entity_registry,
+    label_registry,
+)
 from homeassistant.helpers.http import current_request
 from homeassistant.helpers.translation import async_get_translations
 
@@ -207,11 +212,17 @@ def profile_switch(hass, entry):
     )
 
 
+async def configure_group(hass, flow_id, data):
+    if isinstance(data.get("lights"), list):
+        data = {**data, "lights": {"entity_id": data["lights"]}}
+    return await hass.config_entries.subentries.async_configure(flow_id, data)
+
+
 async def add_group(hass, entry, data):
     flow = await hass.config_entries.subentries.async_init(
         (entry.entry_id, GROUP), context={"source": "user"}
     )
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], data)
+    result = await configure_group(hass, flow["flow_id"], data)
     await hass.async_block_till_done()
     return result
 
@@ -331,7 +342,8 @@ async def test_mixed_area_toggle_edit_and_remove(ha):
         (entry.entry_id, GROUP),
         context={"source": "reconfigure", "subentry_id": mirror.subentry_id},
     )
-    result = await hass.config_entries.subentries.async_configure(
+    result = await configure_group(
+        hass,
         flow["flow_id"],
         {"name": "Bathroom", "lights": [MIRROR, SHOWER], "brightness": 12},
     )
@@ -420,7 +432,8 @@ async def test_script_and_automation_sources_match_only_their_branch(ha):
         (entry.entry_id, GROUP),
         context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
     )
-    result = await hass.config_entries.subentries.async_configure(
+    result = await configure_group(
+        hass,
         flow["flow_id"],
         {
             **data,
@@ -576,7 +589,7 @@ async def test_russian_form_labels_and_independent_interface_option(ha):
     assert labels[f"{prefix}.data.temperature"] == "Цветовая температура (K)"
     assert labels[f"{prefix}.data.transition_ms"] == "Длительность перехода (мсек)"
     assert all(isinstance(field, vol.Optional) for field in schema)
-    missing = await hass.config_entries.subentries.async_configure(form["flow_id"], {})
+    missing = await configure_group(hass, form["flow_id"], {})
     assert missing["errors"] == {"name": "empty_name", "lights": "select_lights"}
 
     data = {"name": "Room", "lights": [HALL], "brightness": 10, "include_ui": False}
@@ -624,8 +637,8 @@ async def test_per_light_effects_and_daylight_restoration(ha):
         select = fields[name].serialize()["selector"]["select"]
         assert not select["multiple"]
         assert [option["value"] for option in select["options"]] == expected
-    result = await hass.config_entries.subentries.async_configure(
-        step["flow_id"], {"Mirror": "Rainbow", "Shower": "Stars"}
+    result = await configure_group(
+        hass, step["flow_id"], {"Mirror": "Rainbow", "Shower": "Stars"}
     )
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     group = next(iter(entry.subentries.values()))
@@ -688,9 +701,7 @@ async def test_per_light_effects_and_daylight_restoration(ha):
         field for field in step["data_schema"].schema if field == "configure_effects"
     )
     assert marker.description["suggested_value"] is True
-    result = await hass.config_entries.subentries.async_configure(
-        step["flow_id"], config
-    )
+    result = await configure_group(hass, step["flow_id"], config)
     assert result["reason"] == "reconfigure_successful"
     assert entry.subentries[group.subentry_id].data["effects"] == {
         MIRROR: "Rainbow",
@@ -714,15 +725,13 @@ async def test_per_light_effects_and_daylight_restoration(ha):
         field for field in step["data_schema"].schema if field == "configure_effects"
     )
     assert marker.description["suggested_value"] is False
-    step = await hass.config_entries.subentries.async_configure(
-        step["flow_id"], config | {"configure_effects": True, "temperature": 0}
+    step = await configure_group(
+        hass, step["flow_id"], config | {"configure_effects": True, "temperature": 0}
     )
     assert step["step_id"] == "effects"
     marker = next(field for field in step["data_schema"].schema if field == "Shower")
     assert marker.description["suggested_value"] == "Stars"
-    result = await hass.config_entries.subentries.async_configure(
-        step["flow_id"], {"Shower": ""}
-    )
+    result = await configure_group(hass, step["flow_id"], {"Shower": ""})
     assert result["reason"] == "reconfigure_successful"
     assert entry.subentries[group.subentry_id].data["effects"] == {}
     await hass.async_block_till_done()
@@ -897,9 +906,7 @@ async def test_profile_handoff_replaces_previous_effect(ha):
         )
         if effect is not None:
             assert result["step_id"] == "effects"
-            result = await hass.config_entries.subentries.async_configure(
-                result["flow_id"], {"Mirror": effect}
-            )
+            result = await configure_group(hass, result["flow_id"], {"Mirror": effect})
         assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
 
@@ -983,9 +990,7 @@ async def test_effect_options_only_show_group_lights_with_translated_labels(ha):
         "off": "Выключено",
         "Experimental": "Experimental",
     }
-    result = await hass.config_entries.subentries.async_configure(
-        step["flow_id"], {"Зеркало": "candle"}
-    )
+    result = await configure_group(hass, step["flow_id"], {"Зеркало": "candle"})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     assert next(iter(entry.subentries.values())).data["effects"] == {
         hue.entity_id: "candle"
@@ -1262,9 +1267,7 @@ async def test_disabling_one_group_preserves_its_settings_and_other_groups(ha):
             field for field in form["data_schema"].schema if field == "enabled"
         )
         assert marker.description["suggested_value"] is not enabled
-        await hass.config_entries.subentries.async_configure(
-            form["flow_id"], group_data | {"enabled": enabled}
-        )
+        await configure_group(hass, form["flow_id"], group_data | {"enabled": enabled})
         await hass.async_block_till_done()
         assert high.subentries[group.subentry_id].data["enabled"] is enabled
         assert high.subentries[group.subentry_id].data["brightness"] == 10
@@ -1375,9 +1378,8 @@ async def test_switch_codes_and_ids_survive_renaming_and_moving_a_group(ha):
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     fields = options["data_schema"].schema
-    identifier = next(field for field in fields if field == "identifier")
-    assert identifier.description["suggested_value"] == f"{profile_code} · {overall}"
-    assert fields[identifier].serialize()["selector"]["text"]["read_only"]
+    assert "identifier" not in fields
+    assert options["description_placeholders"] == {"identifier": overall}
     await hass.config_entries.options.async_configure(
         options["flow_id"], {"name": "Тихий режим", "priority": 50}
     )
@@ -1389,11 +1391,10 @@ async def test_switch_codes_and_ids_survive_renaming_and_moving_a_group(ha):
         context={"source": "reconfigure", "subentry_id": group.subentry_id},
     )
     fields = form["data_schema"].schema
-    identifier = next(field for field in fields if field == "identifier")
-    assert identifier.description["suggested_value"] == f"{group_code} · {group_id}"
-    assert fields[identifier].serialize()["selector"]["text"]["read_only"]
-    await hass.config_entries.subentries.async_configure(
-        form["flow_id"], data | {"name": "Bedside", "area": bedroom.id}
+    assert "identifier" not in fields
+    assert form["description_placeholders"] == {"identifier": group_id}
+    await configure_group(
+        hass, form["flow_id"], data | {"name": "Bedside", "area": bedroom.id}
     )
     await hass.async_block_till_done()
     assert profile_switch(hass, entry) == overall
@@ -1427,3 +1428,52 @@ async def test_switch_code_allocation_retries_collisions(ha, monkeypatch):
         "abcd",
         "1234",
     }
+
+
+@pytest.mark.asyncio
+async def test_group_target_picker_expands_lights_and_saves_a_snapshot(ha):
+    hass, _ = ha
+    entry = await install(hass)
+    room = area_registry.async_get(hass).async_create("Bedroom")
+    label = label_registry.async_get(hass).async_create("Track lights")
+    device = device_registry.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "multi-light")}
+    )
+    registry = entity_registry.async_get(hass)
+    in_room = registry.async_get_or_create("light", DOMAIN, "room-light")
+    registry.async_update_entity(in_room.entity_id, area_id=room.id)
+    registry.async_update_entity(MIRROR, area_id=room.id)
+    registry.async_update_entity(SHOWER, device_id=device.id)
+    registry.async_update_entity(HALL, labels={label.label_id})
+    second = registry.async_get_or_create(
+        "light", DOMAIN, "second-light", device_id=device.id
+    )
+    registry.async_get_or_create("sensor", DOMAIN, "battery", device_id=device.id)
+
+    form = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, GROUP), context={"source": "user"}
+    )
+    config = form["data_schema"].schema["lights"].serialize()["selector"]["target"]
+    assert config["entity"] == [{"domain": ["light"]}]
+    assert form["description_placeholders"] is None
+    target = {
+        "area_id": [room.id],
+        "device_id": [device.id],
+        "label_id": [label.label_id],
+        "entity_id": [registry.async_get(MIRROR).id],
+    }
+    result = await configure_group(
+        hass, form["flow_id"], {"name": "Room", "lights": target}
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    group = next(iter(entry.subentries.values()))
+    expected = sorted([MIRROR, SHOWER, HALL, second.entity_id, in_room.entity_id])
+    assert group.data["lights"] == expected
+
+    registry.async_update_entity(in_room.entity_id, area_id=None)
+    form = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, GROUP),
+        context={"source": "reconfigure", "subentry_id": group.subentry_id},
+    )
+    field = next(field for field in form["data_schema"].schema if field == "lights")
+    assert field.description["suggested_value"] == {"entity_id": expected}

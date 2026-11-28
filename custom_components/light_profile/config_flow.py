@@ -21,10 +21,15 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.helpers.http import current_request
+from homeassistant.helpers.target import (
+    TargetSelection,
+    async_extract_referenced_entity_ids,
+)
 from homeassistant.helpers.translation import async_get_translations
 
 from .const import (
@@ -93,16 +98,29 @@ def _new_switch_code(
             return code
 
 
-def _identifier_field(
-    hass: HomeAssistant, registry_id: str, code: str
-) -> dict[vol.Optional, selector.TextSelector]:
-    entity_id = er.async_get(hass).async_get_entity_id("switch", DOMAIN, registry_id)
-    label = f"{code} · {entity_id}" if entity_id else code
-    return {
-        vol.Optional(
-            IDENTIFIER, description={"suggested_value": label}
-        ): selector.TextSelector({"read_only": True})
-    }
+def _switch_identifier(hass: HomeAssistant, registry_id: str, object_id: str) -> str:
+    return er.async_get(hass).async_get_entity_id("switch", DOMAIN, registry_id) or (
+        f"switch.{object_id}"
+    )
+
+
+def _selected_lights(hass: HomeAssistant, target: dict[str, Any]) -> list[str]:
+    selection = TargetSelection(vol.Schema(cv.TARGET_SERVICE_FIELDS)(target))
+    registry = er.async_get(hass)
+    for item in (selection, selection.exclude):
+        if item is not None:
+            item.entity_ids = {
+                er.async_resolve_entity_id(registry, entity_id) or entity_id
+                for entity_id in item.entity_ids
+            }
+    selected = async_extract_referenced_entity_ids(
+        hass, selection, expand_group=False, primary_entities_only=False
+    )
+    return sorted(
+        entity_id
+        for entity_id in selected.referenced | selected.indirectly_referenced
+        if entity_id.startswith("light.")
+    )
 
 
 class LightProfileConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -164,9 +182,7 @@ class LightProfileOptionsFlow(OptionsFlow):
         defaults = {CONF_NAME: entry.title, PRIORITY: entry.data[PRIORITY]}
         errors = {}
         if user_input is not None:
-            defaults = {
-                key: value for key, value in user_input.items() if key != IDENTIFIER
-            }
+            defaults = user_input
             priorities = {
                 other.data[PRIORITY]
                 for other in self.hass.config_entries.async_entries(
@@ -185,19 +201,13 @@ class LightProfileOptionsFlow(OptionsFlow):
                 return self.async_create_entry(title="", data=entry.options)
         return self.async_show_form(
             step_id="init",
-            data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(
-                    {
-                        vol.Optional(CONF_NAME): PROFILE_SCHEMA.schema[CONF_NAME],
-                        **_identifier_field(
-                            self.hass, entry.entry_id, entry.data[SWITCH_CODE]
-                        ),
-                        vol.Optional(PRIORITY): PROFILE_SCHEMA.schema[PRIORITY],
-                    }
-                ),
-                defaults,
-            ),
+            data_schema=self.add_suggested_values_to_schema(PROFILE_SCHEMA, defaults),
             errors=errors,
+            description_placeholders={
+                IDENTIFIER: _switch_identifier(
+                    self.hass, entry.entry_id, switch_object_id(entry.data[SWITCH_CODE])
+                )
+            },
         )
 
 
@@ -330,28 +340,21 @@ class LightGroupFlow(ConfigSubentryFlow):
         if subentry:
             defaults.setdefault(CONFIGURE_EFFECTS, bool(saved))
             defaults.setdefault(GROUP_ENABLED, True)
+            defaults[LIGHTS] = {"entity_id": subentry.data[LIGHTS]}
 
         if user_input is not None:
-            defaults = {
-                key: value for key, value in user_input.items() if key != IDENTIFIER
-            }
+            defaults = user_input
             data = dict(user_input)
-            data.pop(IDENTIFIER, None)
             title = data.pop(CONF_NAME, "").strip()
-            registry = er.async_get(self.hass)
-            data[LIGHTS] = list(
-                dict.fromkeys(
-                    er.async_resolve_entity_id(registry, entity_id) or entity_id
-                    for entity_id in data.get(LIGHTS, ())
-                )
-            )
+            try:
+                data[LIGHTS] = _selected_lights(self.hass, data.get(LIGHTS, {}))
+            except vol.Invalid:
+                data[LIGHTS] = []
             data[SOURCES] = list(dict.fromkeys(data.get(SOURCES, ())))
 
             if not title:
                 errors[CONF_NAME] = "empty_name"
-            if not data[LIGHTS] or any(
-                not entity_id.startswith("light.") for entity_id in data[LIGHTS]
-            ):
+            if not data[LIGHTS]:
                 errors[LIGHTS] = "select_lights"
             if 0 < data.get(TEMPERATURE, 0) < 1000:
                 errors[TEMPERATURE] = "invalid_temperature"
@@ -371,7 +374,11 @@ class LightGroupFlow(ConfigSubentryFlow):
                     if data[CONFIGURE_EFFECTS]:
                         available = _selected_effects(self.hass, data[LIGHTS], saved)
                         if available:
-                            self._draft = {CONF_NAME: title, **data}
+                            self._draft = {
+                                **data,
+                                CONF_NAME: title,
+                                LIGHTS: {"entity_id": data[LIGHTS]},
+                            }
                             self._effect_choices = available
                             return await self._effects_form(available, subentry)
                     effects = {
@@ -397,19 +404,10 @@ class LightGroupFlow(ConfigSubentryFlow):
 
         fields = {
             vol.Optional(CONF_NAME): selector.TextSelector(),
-            **(
-                _identifier_field(
-                    self.hass,
-                    group_switch_id(self._get_entry().entry_id, subentry.subentry_id),
-                    subentry.data[SWITCH_CODE],
-                )
-                if subentry
-                else {}
-            ),
             vol.Optional(GROUP_ENABLED, default=True): selector.BooleanSelector(),
             vol.Optional(GROUP_AREA): selector.AreaSelector(),
-            vol.Optional(LIGHTS): selector.EntitySelector(
-                {"multiple": True, "filter": {"domain": "light"}}
+            vol.Optional(LIGHTS): selector.TargetSelector(
+                {"entity": {"domain": "light"}, "primary_entities_only": False}
             ),
             vol.Optional(CONFIGURE_EFFECTS, default=False): selector.BooleanSelector(),
         }
@@ -430,10 +428,23 @@ class LightGroupFlow(ConfigSubentryFlow):
                 vol.Optional(INCLUDE_UI, default=False): selector.BooleanSelector(),
             }
         )
+        placeholders = None
+        if subentry is not None:
+            entry = self._get_entry()
+            placeholders = {
+                IDENTIFIER: _switch_identifier(
+                    self.hass,
+                    group_switch_id(entry.entry_id, subentry.subentry_id),
+                    switch_object_id(
+                        entry.data[SWITCH_CODE], subentry.data[SWITCH_CODE]
+                    ),
+                )
+            }
         return self.async_show_form(
             step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(schema, defaults),
             errors=errors,
+            description_placeholders=placeholders,
             last_step=False,
         )
 
