@@ -44,7 +44,6 @@ from .const import (
     DOMAIN,
     EFFECTS,
     GROUP,
-    GROUP_AREA,
     GROUP_ENABLED,
     INCLUDE_UI,
     LIGHTS,
@@ -131,7 +130,6 @@ class LightProfiles:
         self._profiles: dict[str, Profile] = {}
         self._enabled: set[str] = set()
         self._group_overrides: dict[str, dict[str, bool]] = {}
-        self._legacy_area_overrides: dict[str, dict[str, bool]] = {}
         self._lights: dict[str, Group] = {}
         self._tracked: set[str] = set()
         self._sources = SourceTracker(hass)
@@ -153,7 +151,6 @@ class LightProfiles:
         if data := await self._store.async_load():
             self._enabled = set(data["enabled"])
             self._group_overrides = data.get("group_overrides", {})
-            self._legacy_area_overrides = data.get("area_overrides", {})
             self._last_day, self._desired_settings, self._pending = (
                 {
                     entity_id: normalized
@@ -170,7 +167,6 @@ class LightProfiles:
         return {
             "enabled": sorted(self._enabled),
             "group_overrides": dict(self._group_overrides),
-            "area_overrides": dict(self._legacy_area_overrides),
             "last_day": dict(self._last_day),
             "baseline": dict(self._desired_settings),
             "desired_power": dict(self._desired_power),
@@ -215,18 +211,12 @@ class LightProfiles:
             if profile == previous:
                 return
             self._profiles[entry_id] = profile
-            legacy = self._legacy_area_overrides.pop(entry_id, {})
             previous_overrides = self._group_overrides.get(entry_id, {})
             overrides = {
                 group.group_id: previous_overrides[group.group_id]
                 for group in groups
                 if group.group_id in previous_overrides
             }
-            if legacy:
-                for group in groups:
-                    area_id = subentries[group.group_id].data.get(GROUP_AREA)
-                    if area_id in legacy:
-                        overrides.setdefault(group.group_id, legacy[area_id])
             if overrides:
                 self._group_overrides[entry_id] = overrides
             else:
@@ -234,8 +224,6 @@ class LightProfiles:
             try:
                 await self._reconcile(apply=self.hass.is_running)
             except HomeAssistantError:
-                if legacy:
-                    self._legacy_area_overrides[entry_id] = legacy
                 if previous_overrides:
                     self._group_overrides[entry_id] = previous_overrides
                 else:
@@ -256,7 +244,6 @@ class LightProfiles:
         async with self._lock:
             self._enabled.discard(entry_id)
             self._group_overrides.pop(entry_id, None)
-            self._legacy_area_overrides.pop(entry_id, None)
             if not self.hass.config_entries.async_entries(DOMAIN):
                 self._last_day.clear()
                 self._desired_settings.clear()

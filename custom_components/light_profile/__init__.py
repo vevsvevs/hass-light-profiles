@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DATA_ASSIST, PRIORITY
+from .const import DATA_ASSIST, GROUP, PRIORITY, SWITCH_CODE
 from .controller import LightProfiles
 
 PLATFORMS = (Platform.SWITCH,)
@@ -28,6 +28,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: LightProfileEntry) -> bool:
     """Load one profile and its independent switch."""
+    if SWITCH_CODE not in entry.data or any(
+        SWITCH_CODE not in group.data
+        for group in entry.subentries.values()
+        if group.subentry_type == GROUP
+    ):
+        raise ConfigEntryError(
+            "Recreate this profile and its groups to use short switch IDs"
+        )
+
     controller = entry.runtime_data = hass.data[DATA_CONTROLLER]
     try:
         await _async_update_profile(hass, entry)

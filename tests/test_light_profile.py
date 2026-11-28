@@ -24,7 +24,7 @@ from homeassistant.helpers import area_registry, device_registry, entity_registr
 from homeassistant.helpers.http import current_request
 from homeassistant.helpers.translation import async_get_translations
 
-from custom_components.light_profile.const import group_switch_id, switch_code
+from custom_components.light_profile.const import SWITCH_CODE, group_switch_id
 from custom_components.light_profile.daylight import (
     available_effects,
     reported_settings,
@@ -1365,11 +1365,13 @@ async def test_switch_codes_and_ids_survive_renaming_and_moving_a_group(ha):
     group_id = registry.async_get_entity_id(
         "switch", DOMAIN, group_switch_id(entry.entry_id, group.subentry_id)
     )
-    profile_code = switch_code(entry.entry_id)
-    group_code = switch_code(group.subentry_id)
-    assert profile_code.isupper() and len(profile_code) == 8
-    assert overall == f"switch.light_profile_{profile_code.lower()}"
-    assert group_id == f"{overall}_group_{group_code.lower()}"
+    profile_code = entry.data[SWITCH_CODE]
+    group_code = group.data[SWITCH_CODE]
+    for code in (profile_code, group_code):
+        assert len(code) == 4
+        assert code.isascii() and code.isalnum() and code == code.lower()
+    assert overall == f"switch.light_profile_{profile_code}"
+    assert group_id == f"{overall}_group_{group_code}"
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     fields = options["data_schema"].schema
@@ -1407,35 +1409,21 @@ async def test_switch_codes_and_ids_survive_renaming_and_moving_a_group(ha):
 
 
 @pytest.mark.asyncio
-async def test_existing_room_activation_moves_to_its_groups(ha):
+async def test_switch_code_allocation_retries_collisions(ha, monkeypatch):
     hass, _ = ha
-    room = area_registry.async_get(hass).async_create("Living room")
-    entry = await install(hass)
-    for title, light in (("Mirror", MIRROR), ("Shower", SHOWER)):
-        await add_group(
-            hass, entry, {"name": title, "lights": [light], "area": room.id}
-        )
-
-    controller = entry.runtime_data
-    assert await hass.config_entries.async_unload(entry.entry_id)
-    registry = entity_registry.async_get(hass)
-    old_main = profile_switch(hass, entry)
-    registry.async_update_entity(old_main, new_entity_id="switch.light_profile_1")
-    old_room = registry.async_get_or_create(
-        "switch",
-        DOMAIN,
-        f"{entry.entry_id}:{room.id}",
-        config_entry=entry,
-        suggested_object_id="light_profile_1_living_room",
+    choices = iter("abcdabcdwxyzabcdabcd1234")
+    monkeypatch.setattr(
+        "custom_components.light_profile.config_flow.choice",
+        lambda _: next(choices),
     )
-    controller._legacy_area_overrides[entry.entry_id] = {room.id: True}
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    first = await install(hass, priority=10)
+    second = await install(hass, priority=20)
+    assert first.data[SWITCH_CODE] == "abcd"
+    assert second.data[SWITCH_CODE] == "wxyz"
 
-    assert profile_switch(hass, entry) == "switch.light_profile_1"
-    assert registry.async_get(old_room.entity_id) is None
-    for group in entry.subentries.values():
-        unique_id = group_switch_id(entry.entry_id, group.subentry_id)
-        assert hass.states.is_state(
-            registry.async_get_entity_id("switch", DOMAIN, unique_id), STATE_ON
-        )
+    await add_group(hass, first, {"name": "Mirror", "lights": [MIRROR]})
+    await add_group(hass, first, {"name": "Shower", "lights": [SHOWER]})
+    assert {group.data[SWITCH_CODE] for group in first.subentries.values()} == {
+        "abcd",
+        "1234",
+    }

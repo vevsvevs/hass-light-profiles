@@ -17,8 +17,9 @@ from .const import (
     GROUP,
     GROUP_AREA,
     PROFILE_STATE_UPDATED,
+    SWITCH_CODE,
     group_switch_id,
-    switch_code,
+    switch_object_id,
 )
 
 
@@ -33,17 +34,6 @@ async def async_setup_entry(
     main = ProfileSwitch(entry)
     groups: dict[str, ProfileSwitch] = {}
     async_add_entities([main])
-
-    # Older versions registered a switch for each room instead of each group.
-    prefix = f"{entry.entry_id}:"
-    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if (
-            entity.platform == DOMAIN
-            and entity.domain == "switch"
-            and entity.unique_id.startswith(prefix)
-            and not entity.unique_id.startswith(f"{prefix}group:")
-        ):
-            registry.async_remove(entity.entity_id)
 
     @callback
     def sync_groups() -> None:
@@ -111,10 +101,12 @@ class ProfileSwitch(SwitchEntity):
 
     @property
     def suggested_object_id(self) -> str:
-        base = f"{DOMAIN}_{switch_code(self._entry.entry_id).lower()}"
-        if self._group_id is not None:
-            return f"{base}_group_{switch_code(self._group_id).lower()}"
-        return base
+        group_code = (
+            self._entry.subentries[self._group_id].data[SWITCH_CODE]
+            if self._group_id is not None
+            else None
+        )
+        return switch_object_id(self._entry.data[SWITCH_CODE], group_code)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

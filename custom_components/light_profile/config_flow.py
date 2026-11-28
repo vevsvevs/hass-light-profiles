@@ -3,6 +3,8 @@
 import asyncio
 import re
 from itertools import chain
+from secrets import choice
+from string import ascii_lowercase, digits
 from typing import Any
 
 import probatio as vol
@@ -41,10 +43,11 @@ from .const import (
     LIGHTS,
     PRIORITY,
     SOURCES,
+    SWITCH_CODE,
     TEMPERATURE,
     TRANSITION_MS,
     group_switch_id,
-    switch_code,
+    switch_object_id,
 )
 from .daylight import available_effects
 
@@ -70,10 +73,29 @@ PROFILE_SCHEMA = vol.Schema(
 )
 
 
+def _new_switch_code(
+    hass: HomeAssistant, used: set[str], profile_code: str | None = None
+) -> str:
+    registry = er.async_get(hass)
+    while True:
+        code = "".join(choice(ascii_lowercase + digits) for _ in range(4))
+        object_id = (
+            switch_object_id(profile_code, code)
+            if profile_code
+            else switch_object_id(code)
+        )
+        entity_id = f"switch.{object_id}"
+        if (
+            code not in used
+            and not registry.async_get(entity_id)
+            and not hass.states.get(entity_id)
+        ):
+            return code
+
+
 def _identifier_field(
-    hass: HomeAssistant, registry_id: str, code_id: str
+    hass: HomeAssistant, registry_id: str, code: str
 ) -> dict[vol.Optional, selector.TextSelector]:
-    code = switch_code(code_id)
     entity_id = er.async_get(hass).async_get_entity_id("switch", DOMAIN, registry_id)
     label = f"{code} · {entity_id}" if entity_id else code
     return {
@@ -100,7 +122,18 @@ class LightProfileConfigFlow(ConfigFlow, domain=DOMAIN):
             if not errors:
                 await self.async_set_unique_id(str(priority))
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=title, data={PRIORITY: priority})
+                used = {
+                    entry.data[SWITCH_CODE]
+                    for entry in self._async_current_entries()
+                    if SWITCH_CODE in entry.data
+                }
+                return self.async_create_entry(
+                    title=title,
+                    data={
+                        PRIORITY: priority,
+                        SWITCH_CODE: _new_switch_code(self.hass, used),
+                    },
+                )
         return self.async_show_form(
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(PROFILE_SCHEMA, defaults),
@@ -156,7 +189,9 @@ class LightProfileOptionsFlow(OptionsFlow):
                 vol.Schema(
                     {
                         vol.Optional(CONF_NAME): PROFILE_SCHEMA.schema[CONF_NAME],
-                        **_identifier_field(self.hass, entry.entry_id, entry.entry_id),
+                        **_identifier_field(
+                            self.hass, entry.entry_id, entry.data[SWITCH_CODE]
+                        ),
                         vol.Optional(PRIORITY): PROFILE_SCHEMA.schema[PRIORITY],
                     }
                 ),
@@ -346,7 +381,16 @@ class LightGroupFlow(ConfigSubentryFlow):
                     }
                 data[EFFECTS] = effects
                 if subentry is None:
+                    used = {
+                        item.data[SWITCH_CODE]
+                        for item in entry.subentries.values()
+                        if item.subentry_type == GROUP
+                    }
+                    data[SWITCH_CODE] = _new_switch_code(
+                        self.hass, used, entry.data[SWITCH_CODE]
+                    )
                     return self.async_create_entry(title=title, data=data)
+                data[SWITCH_CODE] = subentry.data[SWITCH_CODE]
                 return self.async_update_and_abort(
                     entry, subentry, title=title, data=data
                 )
@@ -357,7 +401,7 @@ class LightGroupFlow(ConfigSubentryFlow):
                 _identifier_field(
                     self.hass,
                     group_switch_id(self._get_entry().entry_id, subentry.subentry_id),
-                    subentry.subentry_id,
+                    subentry.data[SWITCH_CODE],
                 )
                 if subentry
                 else {}

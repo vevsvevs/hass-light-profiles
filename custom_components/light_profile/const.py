@@ -1,8 +1,5 @@
 """Constants for Light Profiles."""
 
-from base64 import b32encode
-from hashlib import blake2s
-
 DOMAIN = "light_profile"
 GROUP = "light_group"
 GROUP_ENABLED = "enabled"
@@ -25,9 +22,13 @@ PRIORITY = "priority"
 IDENTIFIER = "identifier"
 
 
-def switch_code(unique_id: str) -> str:
-    """Derive a short code from Home Assistant's immutable, random ID."""
-    return b32encode(blake2s(unique_id.encode(), digest_size=5).digest()).decode()
+SWITCH_CODE = "switch_code"
+
+
+def switch_object_id(profile_code: str, group_code: str | None = None) -> str:
+    """Build the entity object ID from a profile and optional group code."""
+    base = f"{DOMAIN}_{profile_code}"
+    return f"{base}_group_{group_code}" if group_code else base
 
 
 def group_switch_id(entry_id: str, group_id: str) -> str:
