@@ -25,6 +25,7 @@ from homeassistant.helpers import (
     device_registry,
     entity_registry,
     label_registry,
+    translation,
 )
 from homeassistant.helpers.http import current_request
 from homeassistant.helpers.translation import async_get_translations
@@ -588,6 +589,24 @@ async def test_russian_form_labels_and_independent_interface_option(ha):
     assert f"{prefix}.description" not in labels
     assert labels[f"{prefix}.data.temperature"] == "Цветовая температура (K)"
     assert labels[f"{prefix}.data.transition_ms"] == "Длительность перехода (мсек)"
+    assert labels[f"{prefix}.data_description.name"] == "Введите имя группы"
+    assert (
+        labels[
+            "component.light_profile.config_subentries.light_group.step.reconfigure.data_description.name"
+        ]
+        == "Идентификатор {identifier}"
+    )
+    for category, step, expected in (
+        ("config", "user", "Введите имя профиля"),
+        ("options", "init", "Идентификатор {identifier}"),
+    ):
+        translations = await async_get_translations(hass, "ru", category, [DOMAIN])
+        assert (
+            translations[
+                f"component.light_profile.{category}.step.{step}.data_description.name"
+            ]
+            == expected
+        )
     assert all(isinstance(field, vol.Optional) for field in schema)
     missing = await configure_group(hass, form["flow_id"], {})
     assert missing["errors"] == {"name": "empty_name", "lights": "select_lights"}
@@ -1477,3 +1496,33 @@ async def test_group_target_picker_expands_lights_and_saves_a_snapshot(ha):
     )
     field = next(field for field in form["data_schema"].schema if field == "lights")
     assert field.description["suggested_value"] == {"entity_id": expected}
+
+
+@pytest.mark.asyncio
+async def test_profile_reload_refreshes_cached_name_help(ha, monkeypatch):
+    hass, _ = ha
+    entry = await install(hass)
+    category = "options"
+    key = f"component.{DOMAIN}.options.step.init.data_description.name"
+    translations = await async_get_translations(hass, "ru", category, [DOMAIN])
+    assert translations[key] == "Идентификатор {identifier}"
+
+    load_files = translation._load_translations_files_by_language
+
+    def updated_resources(files):
+        resources = load_files(files)
+        resources["ru"][DOMAIN]["options"]["step"]["init"]["data_description"][
+            "name"
+        ] = "Объект {identifier}"
+        return resources
+
+    monkeypatch.setattr(
+        translation, "_load_translations_files_by_language", updated_resources
+    )
+    assert (await async_get_translations(hass, "ru", category, [DOMAIN]))[
+        key
+    ] == translations[key]
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    updated = await async_get_translations(hass, "ru", category, [DOMAIN])
+    assert updated[key] == "Объект {identifier}"

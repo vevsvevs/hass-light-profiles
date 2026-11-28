@@ -69,7 +69,7 @@
             "configure_effects": "Configure light effects"
           },
           "data_description": {
-            "name": "Entity ID `{identifier}`",
+            "name": "Entity ID {identifier}",
             "area": "Choose an area to control this group separately",
             "brightness": "Set to 0% to turn off the lights in this group",
             "temperature": "Leave blank or enter 0 to use RGB",
@@ -106,7 +106,7 @@
           "priority": "Priority"
         },
         "data_description": {
-          "name": "Entity ID `{identifier}`",
+          "name": "Entity ID {identifier}",
           "priority": "Higher numbers take precedence"
         }
       }

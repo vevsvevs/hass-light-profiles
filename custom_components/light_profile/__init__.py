@@ -4,9 +4,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
+from homeassistant.helpers.translation import async_invalidate_translations
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DATA_ASSIST, GROUP, PRIORITY, SWITCH_CODE
+from .const import DATA_ASSIST, DOMAIN, GROUP, PRIORITY, SWITCH_CODE
 from .controller import LightProfiles
 
 PLATFORMS = (Platform.SWITCH,)
@@ -28,6 +29,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: LightProfileEntry) -> bool:
     """Load one profile and its independent switch."""
+    async_invalidate_translations(hass, (DOMAIN,))
     if SWITCH_CODE not in entry.data or any(
         SWITCH_CODE not in group.data
         for group in entry.subentries.values()
